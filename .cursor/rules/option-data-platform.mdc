@@ -1,0 +1,65 @@
+---
+description: 期权数据中台项目定位、分层边界与数据质量约束
+alwaysApply: true
+---
+
+# Option System Research — Agent 规则
+
+## 定位
+
+- 当前阶段只做 **数据中台**，不做双卖策略、回测引擎或实盘交易逻辑。
+- 首品种：**MO**（中证1000股指期权）；数据源：**天勤 TqSdk**。
+- 下游策略/回测/风控必须消费标准数据，不在本仓库重复拉行情或算 Greeks。
+- `E:\Option_Sell_Research` 仅作兼容参考，禁止把旧 `archive/`、研究脚本扩展为主路径。
+
+## 目录与职责
+
+```text
+option_platform/     # 业务逻辑（common、data/*）
+scripts/               # CLI 入口，不写复杂业务
+docs/                  # 架构与规则（权威：project_rules.md、data_platform.md）
+tests/                 # 单元测试
+configs/data_catalog.json
+data_store/            # 本地数据（默认 gitignore）
+```
+
+- 新逻辑放 `option_platform/`，`scripts/` 只做 argparse + 调用。
+- 旧逻辑经 `snapshots/legacy_tq_mo` 等边界模块过渡，不整段复制进 scripts。
+- 新增核心数据规则必须加 `tests/` 用例。
+
+## TqSdk
+
+- 编写/回答 TqSdk 前参考：`.codex_tmp/tqsdk-trading-and-data/tqsdk-trading-and-data/SKILL.md`
+- 用项目内 `option_platform.data.sources.tq.tq_api()` 上下文管理器，确保 `TqApi` 关闭。
+- 凭证仅来自 `TQ_USER` / `TQ_PASS` 环境变量，禁止硬编码或入库。
+- `get_quote` / tick 序列需 `wait_update()`；长历史优先 `DataDownloader`。
+- 依赖网络的集成测试不要放进默认 `pytest`，做成可选手动脚本。
+
+## 存储与时间轴
+
+- 路径与字段含义以 `configs/data_catalog.json` 和 `option_platform/data/storage/layout.py` 为准。
+- Parquet 列名：**英文小写蛇形**；`data_store/` 不入库。
+- MO 分钟轴：`09:30–11:30`、`13:00–15:00`；tick 对齐取 `quote_time <= target_time` 最近一条。
+- 必须保留 `target_time`、`quote_time`、`quote_age_ms`；默认 `quote_age_ms > 60000` → `stale`。
+- 写入：先临时文件再原子替换；盘中增量、幂等、按 `symbol + target_time` 去重（质量优先，同质量取较新 `quote_time`）。
+
+## 合约池与定价（硬约束）
+
+- 四期限角色：`current_month`、`next_month`、`current_quarter`、`next_quarter`；保存 `term_role`。
+- IV/Greeks 用 **盘口** 定价，禁止用 1 分钟 K 线冒充盘口 IV。
+- `mark_price` 优先级：`micro_price` → `mid_price` → `last_inside_spread` → `last_fallback`；须写 `price_source`、`quote_quality`、`iv_quality`。
+- 盘口无效/过旧/价差异常时 **禁止静默填正常 IV**。
+- `T` 按交易分钟：`T = 剩余交易分钟 / (252 × 240)`，禁止按日历天在开盘扣整天。
+- IV：`calc` / `interp` 须标签；不跨到期日插值；曲面保留 `raw_iv` 与 `smooth_iv`，宁愿有洞也不平滑脏数据。
+
+## 沟通与验证
+
+- 对用户说明、文档、提交说明用 **简体中文**；标识符、CLI、列名用 **英文**。
+- 改完核心逻辑后运行：
+
+```powershell
+E:\Normal_Venv\Scripts\python.exe -m pytest
+E:\Normal_Venv\Scripts\python.exe -m compileall option_platform scripts tests
+```
+
+- 架构细节查 `docs/data_platform.md`、`docs/iv_surface_pipeline.md`，勿把长聊天逐字贴进 `docs/`。

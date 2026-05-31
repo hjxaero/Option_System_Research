@@ -1,0 +1,19 @@
+[project]
+name = "option-system-research"
+version = "0.1.0"
+description = "Data platform foundation for option quantitative research."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+tq = ["tqsdk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+

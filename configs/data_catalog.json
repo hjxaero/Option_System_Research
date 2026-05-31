@@ -1,0 +1,26 @@
+{
+  "products": {
+    "MO": {
+      "name": "CSI 1000 Index Options",
+      "exchange": "CFFEX",
+      "underlying_index": "SSE.000852",
+      "pricing_future_product": "IM",
+      "term_roles": ["current_month", "next_month", "current_quarter", "next_quarter"],
+      "snapshot_modes": ["four_term"],
+      "bar_seconds": 60
+    }
+  },
+  "storage": {
+    "contracts": "contracts/{product}/{trade_date}.parquet",
+    "ticks": "ticks/{product}/{symbol}/{trade_date}.parquet",
+    "minute_quotes": "quotes/minute/{product}/{symbol}/{trade_date}.parquet",
+    "snapshots": "snapshots/{mode}/{product}/{trade_date}.parquet",
+    "snapshot_partition": "snapshots/{mode}/{product}/{pricing_symbol}_{start}_{expiry}.parquet"
+  },
+  "pricing_policy": {
+    "preferred_price": "micro_or_mid_from_bid_ask",
+    "last_price_usage": "fallback_only",
+    "max_normal_spread_bps": 500,
+    "iv_interpolation": "tagged_only_no_silent_fill"
+  }
+}
