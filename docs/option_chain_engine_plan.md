@@ -22,10 +22,10 @@ raw market data
 ### Architecture And Plans
 
 - Saved the system blueprint PDF under `docs/blueprints/`.
-- Added engine-ready snapshot plan in `docs/option_chain_snapshot_plan.md`.
+- Engine-ready snapshot schema documented in this file.
 - Pricing logic lives in `option_platform/pricing/` (Black-76, enrichment).
 - Consolidated option-chain plan and progress in this file (formerly
-  `docs/option_chain_progress.md`).
+  `docs_fix/option_chain_progress.md`).
 
 ### Core Models
 
@@ -259,12 +259,16 @@ Latest result:
 1. Enriched snapshot size is about 3.8x the original snapshot for the first
    month. This is acceptable for the current trial but should be optimized.
 2. Current forward is inferred by put-call parity when `futures_price` is empty.
-   Later snapshots should ideally carry reliable futures/forward prices.
+   Later snapshots should use matching index futures prices as the primary
+   forward source.
 3. Opening snapshots may have wide spreads, so best-timestamp selection should
    remain quality-aware.
 4. Execution usability is currently based on first-level bid/ask and spread
    fields. Real execution checks need deeper liquidity and execution-engine
    logic later.
+5. Black-76 IV/Greeks quality depends heavily on forward quality. Until IM
+   futures minute data is available, parity-implied forward is only a fallback
+   and must be diagnosed with `forward_pairs` and `forward_iqr`.
 
 ## Next Plan
 
@@ -278,6 +282,44 @@ Latest result:
   - current-month only;
   - front two expiries only.
 - Add reader benchmark script.
+
+### Phase 1.5: Add Futures-Based Forward
+
+Status: waiting for index futures minute data.
+
+Goal:
+
+```text
+MO option expiry -> matching IM futures contract -> timestamp-aligned futures price
+```
+
+Forward priority:
+
+```text
+1. matching index futures price
+2. high-quality put-call parity forward
+3. no_forward / low_forward_confidence
+```
+
+Required enriched snapshot fields:
+
+- `futures_symbol`
+- `futures_price`
+- `forward`
+- `forward_source`
+- `forward_quality`
+- `parity_forward`
+- `parity_forward_iqr`
+- `forward_basis_error`
+
+Planned work:
+
+- Build MO expiry to IM futures contract mapping.
+- Download or load IM futures minute prices.
+- Align futures price by `timestamp`.
+- Use futures price as the default Black-76 forward.
+- Keep parity forward as fallback and quality diagnostic.
+- Add quality checks for large futures-vs-parity basis error.
 
 ### Phase 2: Improve Storage Efficiency
 

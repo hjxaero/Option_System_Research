@@ -9,11 +9,13 @@ alwaysApply: true
 
 **只完成分钟盘口原始数据**，为 Option Chain、IV Surface、Research、Strategy、Backtest 等引擎提供 **高质量、可审计、可续跑** 的本地资产。
 
-- 蓝图：`market_data` 落盘（`docs/data_platform.md`、`docs/market_data_agent_plan.md`）
-- **交付物**：`data_store/quotes/minute/MO/{symbol}/{trade_date}.parquet`
-- **不交付**：快照、IV/Greeks、曲面、链查询、策略信号
+- 蓝图：`market_data` 落盘（`docs_fix/data_platform.md`、`docs/market_data_agent_plan.md`）
+- **交付物（两条原始线）**：
+  - MO 期权：`data_store/quotes/minute/MO/{symbol}/{trade_date}.parquet`
+  - 定价用股指期货 **IM**（独立树，见 `docs_fix/im_futures_minute_storage_demo.md`）：`data_store/futures/IM/minute/{trade_date}.parquet` + `meta/contract_calendar.parquet`
+- **不交付**：快照、IV/Greeks、曲面、链查询、策略信号；不把 IM 价写入 MO 快照（下游按 `trade_date`+`timestamp` 关联）
 
-下游必须从本层或更上层的 **其他系统** 读取派生数据；本 Agent 不替它们算 IV、不生成 `snapshots/four_term/`。
+下游用 **IM 盘口** 作 forward；本 Agent 只保证 MO+IM 同属可审计分钟原始层。IM 专项：**`docs/market_data_agent_plan.md` §6**。
 
 ## 目标（P0）
 
@@ -53,7 +55,7 @@ data_store/
   quality/MO/             # manifest、repair、failures、分钟层报告
 ```
 
-- 文档：`docs/market_data_agent_plan.md`（进度台账）、`docs/data_platform.md`、`docs/project_rules.md`
+- 文档：`docs/market_data_agent_plan.md`（进度台账）、`docs_fix/data_platform.md`、`docs_fix/project_rules.md`
 - 实现：`option_platform/data/sources|storage|quality|live_update*`（分钟对齐与 upsert）
 - 入口：`scripts/build_month_*`、`build_windowed_*`、`repair_*`、`infer_first_valid_*`、`update_*minute*`
 - **非主改目标**：`option_platform/data/snapshots/` 生成逻辑、`legacy_tq_mo` 快照路径
@@ -81,6 +83,7 @@ data_store/
   - 更新「当前进度快照」与相关 checklist
   - 在「变更记录」追加一行摘要
 - 不得只在聊天中汇报而不改台账；不得擅自把长对话贴进该文件，只写结构化进度。
+- **非台账** Markdown（设计 Demo、架构补充）写入 `docs_fix/`，不要放进 `docs/`。
 
 ## Agent 行为约束
 

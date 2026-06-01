@@ -8,12 +8,22 @@
       "term_roles": ["current_month", "next_month", "current_quarter", "next_quarter"],
       "snapshot_modes": ["four_term", "four_term_enriched"],
       "bar_seconds": 60
+    },
+    "IM": {
+      "name": "CSI 1000 Index Futures",
+      "exchange": "CFFEX",
+      "pairs_with_option_product": "MO",
+      "pairing_key": "contract_month_yyMM",
+      "bar_seconds": 60
     }
   },
   "storage": {
     "contracts": "contracts/{product}/{trade_date}.parquet",
     "ticks": "ticks/{product}/{symbol}/{trade_date}.parquet",
     "minute_quotes": "quotes/minute/{product}/{symbol}/{trade_date}.parquet",
+    "futures_minute": "futures/{product}/minute/{trade_date}.parquet",
+    "futures_contract_calendar": "futures/{product}/meta/contract_calendar.parquet",
+    "futures_contracts_cache": "contracts/{product}/tq_futures_cache.json",
     "snapshots": "snapshots/{mode}/{product}/{trade_date}.parquet",
     "snapshot_partition": "snapshots/{mode}/{product}/{pricing_symbol}_{start}_{expiry}.parquet",
     "iv_surface_nodes": "surfaces/iv_nodes/{product}/{trade_date}.parquet",

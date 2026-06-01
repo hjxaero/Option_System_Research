@@ -9,7 +9,7 @@ alwaysApply: true
 
 **把已落盘的分钟盘口 + 合约元数据，组织成可查询的期权链**，并产出下游引擎可直接消费的 **引擎就绪快照** 与 **内存 `OptionChain`**。
 
-- 蓝图：`docs/option_chain_engine_plan.md`、`docs/option_chain_snapshot_plan.md`
+- 蓝图：`docs/option_chain_engine_plan.md`
 - **交付物（持久化）**：`data_store/snapshots/four_term/{PRODUCT}/{trade_date}.parquet`（或迁移期 `four_term_enriched/`）
 - **交付物（运行时）**：`option_platform.core` 对象 + `option_platform.option_chain.OptionChain` 查询语义
 - **不交付**：原始 tick/分钟下载、repair/manifest、IV 曲面拟合、策略信号、下单
@@ -29,16 +29,16 @@ Strategy / Backtest / Risk（系统 4+）
   -> 只读 enriched 快照、曲面或 OptionChain API
 ```
 
-依赖规则（硬约束，见 `docs/project_rules.md`、`docs/data_platform.md`）：
+依赖规则（硬约束，见 `docs_fix/project_rules.md`、`docs_fix/data_platform.md`）：
 
 - 策略/回测 **不得** 直接读 `quotes/minute/` 或调数据源 SDK。
 - 本 Agent **不得** 实现 `build_month_*` / `build_windowed_*` / `repair_*` 下载流水线（属系统 1）。
-- **禁止** 再建第二套链存储：`data_store/engine/option_chain/`（见 `docs/option_chain_snapshot_plan.md`）。
+- **禁止** 再建第二套链存储：`data_store/engine/option_chain/`（见 `docs/option_chain_engine_plan.md`）。
 
 ## 目标（P0）
 
 1. **链结构**：按 `expiry` / `strike` 对齐 call/put；支持 DTE、moneyness、ATM、流动性/价差过滤（MVP 见架构文档）。
-2. **引擎就绪快照**：一行 = 一个 `timestamp` × 一个合约；含 `mark_price`、`forward`、`t_years`、`iv`、Greeks、`quote_quality` / `iv_quality` 等（列清单以 `option_chain_snapshot_plan.md` 为准）。
+2. **引擎就绪快照**：一行 = 一个 `timestamp` × 一个合约；含 `mark_price`、`forward`、`t_years`、`iv`、Greeks、`quote_quality` / `iv_quality` 等（列清单以 `docs/option_chain_engine_plan.md` 与 `configs/data_catalog.json` 为准）。
 3. **`t_years` 统一**：快照 enrichment 阶段 **唯一计算**，使用 `option_platform.data.time_to_expiry.calculate_t_years_by_trading_minutes`；下游禁止各自重算日历天 T。
 4. **运行时轻量**：`reader` / `runtime` 读 enriched 列构建 `OptionChain`；**默认** 不再对全链重算 IV/Greeks（定价数学归属 `option_platform.pricing`，编排归属 enrichment）。
 

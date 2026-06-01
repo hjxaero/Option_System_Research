@@ -10,6 +10,6 @@
 - 标准化 IV、Greeks、保证金、质量检查
 - 为后续回测、实盘、风控共用同一份数据底座
 
-详见 [数据中台设计](docs/data_platform.md) 与 [项目规则](docs/project_rules.md)。
+详见 [数据中台设计](docs_fix/data_platform.md) 与 [项目规则](docs_fix/project_rules.md)。
 
 系统计划与进度见 [市场数据](docs/market_data_agent_plan.md)、[期权链引擎](docs/option_chain_engine_plan.md)、[IV 曲面引擎](docs/iv_surface_engine_plan.md)。

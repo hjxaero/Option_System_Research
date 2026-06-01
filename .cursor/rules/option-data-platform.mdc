@@ -24,7 +24,8 @@ alwaysApply: true
 ```text
 option_platform/     # 业务逻辑（common、data/*）
 scripts/               # CLI 入口，不写复杂业务
-docs/                  # 架构与规则（权威：project_rules.md、data_platform.md）
+docs/                  # Agent 计划台账（*_agent_plan.md、*_engine_plan.md）
+docs_fix/              # 架构、规则、设计 Demo（权威：project_rules.md、data_platform.md）
 tests/                 # 单元测试
 configs/data_catalog.json
 data_store/            # 本地数据（默认 gitignore）
@@ -69,4 +70,4 @@ E:\Normal_Venv\Scripts\python.exe -m pytest
 E:\Normal_Venv\Scripts\python.exe -m compileall option_platform scripts tests
 ```
 
-- 架构细节查 `docs/data_platform.md`、`docs/project_rules.md`；系统 3 进度查 `docs/iv_surface_engine_plan.md`，勿把长聊天逐字贴进 `docs/`。
+- 架构细节查 `docs_fix/data_platform.md`、`docs_fix/project_rules.md`；各 Agent 进度查 `docs/*_plan.md`；非台账文档放 `docs_fix/`，勿把长聊天逐字贴进计划文件。

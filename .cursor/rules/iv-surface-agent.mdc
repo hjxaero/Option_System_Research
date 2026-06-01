@@ -9,7 +9,7 @@ alwaysApply: true
 
 **把系统 2 产出的引擎就绪 enriched 快照，转化为可追溯、可复现、带质量标签的 IV 曲面节点**（`raw_iv` + 可选 `smooth_iv` + 曲面质量摘要）。
 
-- 蓝图：`docs/iv_surface_engine_plan.md`；字段规范 `docs/project_rules.md`、`option_platform/data/contracts.py`
+- 蓝图：`docs/iv_surface_engine_plan.md`；字段规范 `docs_fix/project_rules.md`、`option_platform/data/contracts.py`
 - 计划与进度：**权威台账** `docs/iv_surface_engine_plan.md`
 - **交付物（持久化）**：
   - `data_store/surfaces/iv_nodes/{PRODUCT}/{trade_date}.parquet`
@@ -32,7 +32,7 @@ Research / Strategy / Backtest / Risk / Monitoring
   -> 只读曲面产物或链上已附着的列（禁止回退读 minute 重算曲面）
 ```
 
-依赖规则（硬约束，见 `docs/project_rules.md`、`docs/iv_surface_engine_plan.md`）：
+依赖规则（硬约束，见 `docs_fix/project_rules.md`、`docs/iv_surface_engine_plan.md`）：
 
 - 曲面从 enriched 快照 **派生**，**禁止覆盖** 系统 2 快照文件。
 - **禁止** 把 `iv_quality` 非 ok（且非显式允许降级）的节点静默写成 `surface_quality=ok` 或填满 `smooth_iv`。
@@ -74,14 +74,14 @@ tests/
 
 | 方向 | 路径 / 对象 | 说明 |
 |------|-------------|------|
-| 输入 | `data_store/snapshots/four_term_enriched/{PRODUCT}/{trade_date}.parquet` | 必备列见 `docs/option_chain_snapshot_plan.md` 与 `iv_surface_engine_plan.md` |
+| 输入 | `data_store/snapshots/four_term_enriched/{PRODUCT}/{trade_date}.parquet` | 必备列见 `docs/option_chain_engine_plan.md` 与 `iv_surface_engine_plan.md` |
 | 输入（过渡） | `forward` / `futures_price` / `underlying_price` | moneyness 分母，实现须兼容迁移期列名 |
 | 输出 | `data_store/surfaces/iv_nodes/{PRODUCT}/{trade_date}.parquet` | `IvSurfaceSchema` + `surface_method` |
 | 输出 | `data_store/quality/iv_surface/{PRODUCT}/{trade_date}.json` | 覆盖率与剔除原因统计 |
 
 上游 enriched 未就绪时：输出 **缺失 trade_date / 列清单**，提示走系统 2；**不** 在本 Agent 内补拉分钟或重建 enrichment。
 
-## 曲面质量规则（与 `docs/iv_surface_engine_plan.md`、`docs/project_rules.md` 一致）
+## 曲面质量规则（与 `docs/iv_surface_engine_plan.md`、`docs_fix/project_rules.md` 一致）
 
 - `raw_iv` 必须等于（或可追溯到）快照 `iv`。
 - `smooth_iv` 为空是正常状态；宁愿有洞，也不平滑脏数据。

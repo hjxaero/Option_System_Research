@@ -1,0 +1,4 @@
+trade_date,symbol,expiry_date,target_time,quote_time,quote_age_ms,bid_price1,ask_price1,bid_volume1,ask_volume1,last_price,mid_price,micro_price,spread,spread_bps,price_source,quote_quality,volume,open_interest
+2025-05-27,CFFEX.IM2506,2025-06-20,2025-05-27 09:30:00,2025-05-27 09:30:00,0,5123.0,5123.2,12,15,5123.1,5123.1,5123.08,0.2,0.39,micro,ok,1000,50000
+2025-05-27,CFFEX.IM2506,2025-06-20,2025-05-27 09:31:00,2025-05-27 09:31:00,0,5123.2,5123.6,12,15,5123.4,5123.4,5124.16,0.4,0.78,micro,ok,1002,50000
+2025-05-27,CFFEX.IM2506,2025-06-20,2025-05-27 15:00:00,2025-05-27 15:00:00,0,5118.6,5119.0,12,15,5118.8,5118.8,5118.76,0.4,0.78,micro,ok,1562,50000

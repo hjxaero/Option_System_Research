@@ -21,7 +21,8 @@ option_platform/
     snapshots/     # 期权链快照
     contracts.py   # 数据契约
 scripts/           # 命令入口
-docs/              # 架构、规则、上下文
+docs/              # Agent 计划台账（*_plan.md）
+docs_fix/          # 架构、规则、设计 Demo、样例
 tests/             # 自动化测试
 ```
 
@@ -201,7 +202,7 @@ IV 和 Greeks 的价格输入优先来自盘口，不优先用最新价。
 2. 代码标识符、CLI 参数、parquet 列名使用英文。
 3. 复杂公式先白话定义变量，再写公式。
 4. 敏感默认值必须在相关 README 或设计文档中显式列出。
-5. 跨模块架构决策写入 `docs/`，不把长聊天记录逐字粘贴进文档。
+5. 跨模块架构决策写入 `docs_fix/`；Agent 进度只更新 `docs/*_plan.md`，不把长聊天记录逐字粘贴进文档。
 
 ## 10. 测试规则
 

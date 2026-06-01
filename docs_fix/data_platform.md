@@ -83,7 +83,7 @@ data_store/
 ```
 
 平台规则见 [project_rules.md](project_rules.md)。  
-系统 2 快照见 [option_chain_snapshot_plan.md](option_chain_snapshot_plan.md)；系统 3 计划与进度见 [iv_surface_engine_plan.md](iv_surface_engine_plan.md)。
+系统 2 计划与快照契约见 [option_chain_engine_plan.md](option_chain_engine_plan.md)；系统 3 计划与进度见 [iv_surface_engine_plan.md](iv_surface_engine_plan.md)。
 
 ## 盘中更新
 

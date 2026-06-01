@@ -2,9 +2,10 @@
 
 > **权威台账**：市场数据 Agent 的工作计划、执行进度、阻塞与下一步 **以本文件为准**。  
 > 每完成一项任务（或一次可汇报的阶段）后 **必须更新** 本文件（含「最后更新」时间与变更记录）。  
-> 范围：**仅** `data_store/quotes/minute/MO/` 分钟盘口原始层（不含快照 / IV / 曲面）。
+> 范围：**分钟盘口原始层** — MO 期权 + 定价用股指期货 **IM**（不含快照 / IV / 曲面）。  
+> IM 专项计划见 **§6**。
 
-最后更新：**2026-06-01**（P0 全历史续跑已启动，从第 10 窗）
+最后更新：**2026-06-01**（新增 §6：IM 股指期货分钟盘口需求与计划）
 
 ---
 
@@ -12,10 +13,12 @@
 
 | 项 | 说明 |
 |----|------|
-| 交付物 | `quotes/minute/MO/{symbol}/{trade_date}.parquet` |
-| 目标区间 | `2022-07-22` → `2026-05-30`（全历史，10 日分窗） |
-| 编排 | `scripts/build_windowed_four_term_minute_quotes.py` + manifest |
-| 不在范围 | 快照、IV/Greeks、曲面、策略/回测/实盘 |
+| 交付物 A | `quotes/minute/MO/{symbol}/{trade_date}.parquet`（MO 四期限期权） |
+| 交付物 B | `futures/IM/minute/{trade_date}.parquet` + `futures/IM/meta/contract_calendar.parquet`（见 storage demo 文档） |
+| MO 目标区间 | `2022-07-22` → `2026-05-30`（10 日分窗，进行中） |
+| IM 目标区间 | 与 MO **交易日对齐**；合约按日解析主力/近月（见 §6） |
+| 编排 | MO：`build_windowed_four_term_minute_quotes.py`；IM：待建（§6，复用分钟对齐管线） |
+| 不在范围 | 快照、IV/Greeks、曲面、将 IM 并入 MO parquet、策略/回测/实盘 |
 
 规则：`.cursor/rules/market-data-agent.mdc`
 
@@ -46,9 +49,21 @@
 
 ### 阶段 D — 交付验收（未开始）
 
-- [ ] 全历史下载完成后，生成 **分钟层** 区间质量摘要（非快照 gate）
+- [ ] MO 全历史下载完成后，生成 **分钟层** 区间质量摘要（非快照 gate）
 - [ ] 更新 `first_valid_dates.json` 全区间
 - [ ] 向用户移交：manifest、failures 索引、已知流动性限制说明
+
+### 阶段 E — 股指期货 IM 分钟盘口（新需求，未开始）
+
+> **背景**：`configs/data_catalog.json` 已定义 MO 的 `pricing_future_product: "IM"`，但 `four_term` 快照里 `futures_price` 仍为 NA；下游 IV/曲面/链引擎需要 **可靠 forward**，应来自 **IM 期货盘口分钟价**，而非指数现货或期权推导。
+
+- [ ] **E1** 设计与契约（见 §6.2）
+- [ ] **E2** 冒烟：单日/单合约 tick → 分钟对齐质量
+- [ ] **E3** 实现下载与存储（复用 `tq_minute_quotes` + `live_update`）
+- [ ] **E4** 按 MO 日历分窗拉全历史 IM（独立 manifest，**不与 MO 下载并行**）
+- [ ] **E5** IM 质量 repair + 分钟层报告；输出「MO 日 × timestamp → IM symbol / 盘口价」索引供下游
+
+**与 P0 关系**：P0（MO）继续优先；IM 在 **MO 单流水线空闲时** 或 **MO 达里程碑后** 启动，避免 Tq FileLock 冲突。
 
 ---
 
@@ -56,9 +71,9 @@
 
 | 指标 | 数值 |
 |------|------|
-| 分窗进度 | **9 / 141**（6.4%） |
-| 日历覆盖（manifest 已完成） | **2022-07-22** ～ **2022-10-19** |
-| 下一窗 | **第 10 窗**：`2022-10-20` ～ `2022-10-29` |
+| 分窗进度 | **10 / 141**（7.1%） |
+| 日历覆盖（manifest 已完成） | **2022-07-22** ～ **2022-10-29** |
+| 下一窗 | **第 11 窗**：`2022-10-30` ～ `2022-11-08`（**进行中**） |
 | 本地 parquet 文件数 | 约 **14,956** |
 | 后台任务 | **P0 全历史下载中**（`build_windowed`，workers=4，从第 10 窗起） |
 
@@ -97,7 +112,8 @@ Manifest：`data_store/quality/MO/batch_10d/MO_20220722_20260530_w10_manifest.js
 
 | 优先级 | 动作 | 命令/入口 |
 |--------|------|-----------|
-| P0 | 续跑全历史（从第 10 窗） | `build_windowed_four_term_minute_quotes.py`（用户确认后后台） |
+| P0 | 续跑 MO 全历史 | `build_windowed_four_term_minute_quotes.py`（**进行中**，勿并行 IM） |
+| P4 | IM 股指期货分钟盘口 | §6 阶段 E1→E5（待立项实施） |
 | P1 | ~~补第 8 窗 failures~~ | **已完成**（906 saved，12 仍失败） |
 | P1b | 余 12 合约再试 | `window8_failures_symbols.txt` 子集或读 `*_retry_failures.csv` |
 | P2 | 各窗 failures 扫尾 | 合并 `batch_10d/*_failures.csv` |
@@ -117,6 +133,84 @@ caffeinate -dims python scripts/build_windowed_four_term_minute_quotes.py \
 
 ---
 
+## 6. 新需求：股指期货（IM）分钟盘口计划
+
+### 6.1 为什么要做
+
+| 问题 | 说明 |
+|------|------|
+| 衍生数据质量 | IV、Greeks、曲面、链上 forward 依赖 **标的期货价**；仅用指数或期权反推不可靠 |
+| 项目配置 | `pricing_future_product: "IM"`（中证1000股指期货，CFFEX） |
+| 现状 | MO 分钟盘口在拉；**无** IM 分钟盘口资产；快照列 `futures_price` / `underlying_price` 占位 NA |
+| Agent 边界 | 本 Agent 负责 **IM 原始分钟盘口**；写入快照/算 IV 属其他 Agent |
+
+### 6.2 目标与存储
+
+**目标**：对每个 MO 交易日、每个标准分钟 `target_time`，提供可审计的 IM **盘口**（bid/ask/mid/micro、质量标签），供下游按 `trade_date` + `timestamp` join。
+
+**存储（独立资产线，仅时间轴与 MO 对齐）**：
+
+- 详细 Demo：**`docs_fix/im_futures_minute_storage_demo.md`**；本地样例：`python scripts/write_im_storage_demo.py` → `data_store/_demo/futures/IM/`
+- **不按 MO 的** `quotes/minute/MO/{symbol}/{date}` 组织；IM 用 **`futures/IM/minute/{trade_date}.parquet`**（按日单文件）+ **`futures/IM/meta/contract_calendar.parquet`**（定价合约日历）
+- **对齐**：`target_time` 仍用 `generate_session_minutes`（241 点/日）；join 键为 `trade_date` + `target_time`，存储路径与 MO manifest 无耦合
+
+### 6.3 合约选择（已确认：按月份码配对）
+
+**规则（用户确认）**：MO 与 IM 按 **同一 `YYMM` 月份码** 成组，例如 **MO2601 期权链 ↔ IM2601 期指**，**MO2602 ↔ IM2602**；不是「全 MO 共用一张当日主力 IM」。
+
+| MO 侧 | IM 侧 |
+|--------|--------|
+| `CFFEX.MO2601-C-6000` 等 | `CFFEX.IM2601` |
+| `CFFEX.MO2602-P-7000` 等 | `CFFEX.IM2602` |
+
+**v1 实现要点**：
+
+1. 从 Tq 拉 `CFFEX.IM*`（含 `expired=True`）缓存；`contract_month` = 品种代码中的 4 位 `YYMM`。
+2. 每个 `trade_date`：根据当日 MO 四期限涉及的 **到期月份集合**，解析出对应 IM 列表（通常 2～4 个 `symbol`），写入 **同一** `futures/IM/minute/{trade_date}.parquet`。
+3. `meta/contract_calendar.parquet`：每行 `(trade_date, contract_month, symbol, expiry_date)`，供审计与下游 join。
+4. 禁止把不同 `contract_month` 的 IM 价混给另一月 MO（避免 forward 错月）。
+
+连续主力、指数现货不在 v1 范围。
+
+### 6.4 实施阶段（建议顺序）
+
+| 阶段 | 内容 | 产出 | 状态 |
+|------|------|------|------|
+| **E1** | `data_catalog.json` IM 块 + `option_platform/data/futures/*` | 已完成 | [x] |
+| **E2** | 冒烟：`build_im_minute_quotes.py --dry-run` 或单日拉取（需 Tq） | 质量报告 | 待做 |
+| **E3** | `scripts/build_im_minute_quotes.py`：MO 四期限 → 同码 IM、skip-complete、manifest | 已实现 | [x] |
+| **E4** | 全历史：日期范围 **对齐 MO manifest 已覆盖段**，再随 MO 扩窗；独立 `IM_*_manifest.json` | 与 MO 同跨度 parquet | 待做 |
+| **E5** | `generate_repair_plan` / repair；产出 `quality/IM/` 摘要；文档说明下游 join 键 | 移交下游 | 待做 |
+
+**工程复用**（不重复造轮子）：
+
+- `option_platform/data/sources/tq_minute_quotes.py`（tick 拉取与对齐）
+- `option_platform/data/live_update.py` → `update_symbol_range_minute_quotes(..., product="IM")`
+- `option_platform/data/cleaning.py`（盘口分级）
+- 质量与 repair：`quality/repair.py` 同逻辑，product 参数化
+
+**验收标准（分钟层，非 IV）**：
+
+1. 任意 MO 已覆盖交易日，存在对应 IM 合约的 minute parquet，且 `quote_quality=ok` 占比可接受（IM 流动性通常优于深虚值 MO）。
+2. `missing_file` 可 repair；repair 后 failures 清单可追溯。
+3. 对任意 MO 合约行，可按 `contract_month` + `(trade_date, target_time)` 取到 **同码** IM 的 `micro_price`/`mid_price`。
+
+### 6.5 风险与约束
+
+1. **勿与 MO `build_windowed` 并行**：同账户 Tq FileLock；IM 下载排队在 MO 流水线之外时段。
+2. **换月**：v1 按日指定合约，不在本 Agent 做连续主力复权价。
+3. **指数现货 `SSE.000852`**：非本需求范围；若后续要现货盘口，单独立项。
+4. **专业版 tick**：与 MO 相同，依赖 `get_tick_data_series` 权限。
+
+### 6.6 待用户确认
+
+- [x] **月份配对**：MO`YYMM` ↔ IM`YYMM`（如 2601 一组、2602 一组）；见 §6.3
+- [x] **IM 存储形态**：独立 `futures/IM/` 按日单文件（见 storage demo）
+- [ ] IM 全历史是否与 MO **同起止日**（`2022-07-22` 起）？
+- [ ] MO P0 与 IM E4 **串行** 是否接受（先 MO 后 IM，或 MO 每完成 N 窗插一批 IM）？
+
+---
+
 ## 5. 变更记录
 
 | 日期 | 变更 |
@@ -126,3 +220,10 @@ caffeinate -dims python scripts/build_windowed_four_term_minute_quotes.py \
 | 2026-06-01 | 启动 P1：第 8 窗 `2022-09-30`～`2022-10-09`，177 失败合约定向 `build_month`（`--no-skip-complete`） |
 | 2026-06-01 | P1 完成：`saved_days=906`，`failed_symbols=12`（原 177）；报告 `MO_20220930_20221009_retry_summary.json` |
 | 2026-06-01 | 用户确认 P0：启动 `build_windowed` 续跑（9/141 已完成，下一窗 `2022-10-20`～`2022-10-29`） |
+| 2026-06-01 | 用户要求中断后重启 P0；监控 `full_history.log` + manifest |
+| 2026-06-01 | 新需求：为可靠衍生数据增加 **IM 股指期货分钟盘口**；新增 §6 与阶段 E；扩展 Agent 使命（MO+IM 原始层） |
+| 2026-06-01 | 确认配对规则：**MO2601↔IM2601**（按 `YYMM` 分组，非单日主力）；更新 storage demo §月份配对 |
+| 2026-06-01 | 文档布局：`docs/` 仅 Agent 计划；架构/规则/IM demo 迁至 `docs_fix/` |
+| 2026-06-01 | 蓝图 PDF 保留在 `docs/blueprints/` |
+| 2026-06-01 | 用户要求停 P0；workers 4 vs 6 实测（36 合约×2 日）：4=196s/0 失败，6=188s/1 超时失败 → **仍建议 workers=4** |
+| 2026-06-01 | IM E1/E3：`option_platform/data/futures/` + `scripts/build_im_minute_quotes.py` + 单测 |
