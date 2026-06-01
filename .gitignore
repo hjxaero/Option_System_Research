@@ -1,10 +1,12 @@
 __pycache__/
 *.py[cod]
+.pycache/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .venv/
 venv/
+Normal/
 
 data_store/
 *.parquet

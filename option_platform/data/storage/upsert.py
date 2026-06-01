@@ -35,7 +35,7 @@ def merge_minute_quotes(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.Da
 
     for col in ("target_time", "quote_time"):
         if col in merged.columns:
-            merged[col] = pd.to_datetime(merged[col])
+            merged[col] = pd.to_datetime(merged[col]).astype("datetime64[ns]")
 
     sort_cols = ["symbol", "target_time", "_quality_rank"]
     ascending = [True, True, True]

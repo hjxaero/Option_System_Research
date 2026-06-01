@@ -12,6 +12,13 @@ alwaysApply: true
 - 下游策略/回测/风控必须消费标准数据，不在本仓库重复拉行情或算 Greeks。
 - `E:\Option_Sell_Research` 仅作兼容参考，禁止把旧 `archive/`、研究脚本扩展为主路径。
 
+## Agent 分工
+
+- **市场数据 Agent**（`.cursor/rules/market-data-agent.mdc`）：只交付 `quotes/minute/` 分钟盘口原始层，供下游引擎消费。
+- **期权链 Agent（系统 2）**（`.cursor/rules/option-chain-agent.mdc`）：交付四期限期权链、enriched snapshot、`OptionChain` 查询语义。
+- **波动率曲面 Agent（系统 3）**（`.cursor/rules/iv-surface-agent.mdc`）：消费 enriched snapshot，交付 `raw_iv` / `smooth_iv` 曲面节点、质量标签和曲面质量摘要。
+- 快照、IV/Greeks、曲面、期权链内存引擎等 **不属于** 市场数据 Agent 默认任务；见该规则中的 P1/P2 排除项。
+
 ## 目录与职责
 
 ```text
@@ -62,4 +69,4 @@ E:\Normal_Venv\Scripts\python.exe -m pytest
 E:\Normal_Venv\Scripts\python.exe -m compileall option_platform scripts tests
 ```
 
-- 架构细节查 `docs/data_platform.md`、`docs/iv_surface_pipeline.md`，勿把长聊天逐字贴进 `docs/`。
+- 架构细节查 `docs/data_platform.md`、`docs/project_rules.md`；系统 3 进度查 `docs/iv_surface_engine_plan.md`，勿把长聊天逐字贴进 `docs/`。

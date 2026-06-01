@@ -10,6 +10,15 @@ from option_platform.data.sources.tq_ticks import download_tick_frame
 from option_platform.data.trading_minutes import generate_session_minutes, trade_day_bounds
 
 
+def _normalize_minute_timestamps(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
+    """Force minute alignment keys to datetime64[ns] for merge_asof compatibility."""
+    result = frame.copy()
+    for column in columns:
+        if column in result.columns:
+            result[column] = pd.to_datetime(result[column]).astype("datetime64[ns]")
+    return result
+
+
 def align_ticks_to_minutes(
     ticks: pd.DataFrame,
     target_minutes: pd.DataFrame,
@@ -19,7 +28,10 @@ def align_ticks_to_minutes(
     if "target_time" not in target_minutes.columns:
         raise ValueError("target_minutes must contain target_time")
 
-    targets = target_minutes[["target_time"]].copy().sort_values("target_time")
+    targets = _normalize_minute_timestamps(
+        target_minutes[["target_time"]].copy(),
+        ("target_time",),
+    ).sort_values("target_time")
     if targets.empty:
         return targets
 
@@ -36,6 +48,7 @@ def align_ticks_to_minutes(
 
     quotes = ticks[required + [c for c in ["volume", "amount", "open_interest"] if c in ticks.columns]].copy()
     quotes = quotes.sort_values("datetime").rename(columns={"datetime": "quote_time"})
+    quotes = _normalize_minute_timestamps(quotes, ("quote_time",))
 
     aligned = pd.merge_asof(
         targets,

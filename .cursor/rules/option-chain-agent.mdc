@@ -1,0 +1,101 @@
+---
+description: 系统2——期权链引擎 Agent，合约状态总线与引擎就绪快照
+alwaysApply: true
+---
+
+# Option Chain Engine Agent（系统 2）
+
+## 使命（唯一交付）
+
+**把已落盘的分钟盘口 + 合约元数据，组织成可查询的期权链**，并产出下游引擎可直接消费的 **引擎就绪快照** 与 **内存 `OptionChain`**。
+
+- 蓝图：`docs/option_chain_engine_plan.md`、`docs/option_chain_snapshot_plan.md`
+- **交付物（持久化）**：`data_store/snapshots/four_term/{PRODUCT}/{trade_date}.parquet`（或迁移期 `four_term_enriched/`）
+- **交付物（运行时）**：`option_platform.core` 对象 + `option_platform.option_chain.OptionChain` 查询语义
+- **不交付**：原始 tick/分钟下载、repair/manifest、IV 曲面拟合、策略信号、下单
+
+系统 1（市场数据）负责 `quotes/minute/`；本 Agent **不调用 Tq 拉历史 tick**，除非用户 **明确改派** 为联调/补数。
+
+## 在平台中的位置
+
+```text
+Market Data（系统 1）
+  -> 分钟盘口 parquet + 合约缓存
+Option Chain Engine（系统 2）  ← 本 Agent
+  -> 四期限选约 + 链行对齐 + 快照 enrichment + 内存查询
+IV Surface Engine（系统 3）
+  -> 只读 enriched 快照，产出曲面节点
+Strategy / Backtest / Risk（系统 4+）
+  -> 只读 enriched 快照、曲面或 OptionChain API
+```
+
+依赖规则（硬约束，见 `docs/project_rules.md`、`docs/data_platform.md`）：
+
+- 策略/回测 **不得** 直接读 `quotes/minute/` 或调数据源 SDK。
+- 本 Agent **不得** 实现 `build_month_*` / `build_windowed_*` / `repair_*` 下载流水线（属系统 1）。
+- **禁止** 再建第二套链存储：`data_store/engine/option_chain/`（见 `docs/option_chain_snapshot_plan.md`）。
+
+## 目标（P0）
+
+1. **链结构**：按 `expiry` / `strike` 对齐 call/put；支持 DTE、moneyness、ATM、流动性/价差过滤（MVP 见架构文档）。
+2. **引擎就绪快照**：一行 = 一个 `timestamp` × 一个合约；含 `mark_price`、`forward`、`t_years`、`iv`、Greeks、`quote_quality` / `iv_quality` 等（列清单以 `option_chain_snapshot_plan.md` 为准）。
+3. **`t_years` 统一**：快照 enrichment 阶段 **唯一计算**，使用 `option_platform.data.time_to_expiry.calculate_t_years_by_trading_minutes`；下游禁止各自重算日历天 T。
+4. **运行时轻量**：`reader` / `runtime` 读 enriched 列构建 `OptionChain`；**默认** 不再对全链重算 IV/Greeks（定价数学归属 `option_platform.pricing`，编排归属 enrichment）。
+
+## 职责内模块
+
+```text
+option_platform/
+  core/models.py              # OptionContractRef, OptionQuote, OptionGreeks, OptionChainRow
+  option_chain/
+    builder.py chain.py       # 纯内存建链（无 IO）
+    adapters/snapshot.py      # DataFrame / parquet -> core 对象
+    enrichment.py             # forward / t_years / IV / Greeks 写入快照（批量一次）
+    reader.py runtime.py      # 读快照、按 timestamp 出链
+    quality.py                # chain_quality / pricing 覆盖率
+  data/snapshots/four_term.py # 从分钟盘口拼装基础快照（无 enrichment 时可占位 NA）
+  data/universe.py            # 四期限 term_role（链选约语义）
+scripts/build_four_term_snapshots.py
+scripts/run_option_chain_month_trial.py   # 试跑/验收（若存在）
+tests/test_option_chain_engine.py
+```
+
+**非主改目标（除非用户改派）**：`option_platform/data/sources/*`、`live_update*`、`download_windows`、`chain_engine.download_*`（下载编排应留在系统 1 或 scripts）。
+
+## 定价与 IV 边界
+
+| 动作 | 归属 |
+|------|------|
+| Black-76、隐含波动率求解 | `option_platform.pricing`（数学） |
+| 快照批量写 `iv`/`delta`/…、`forward`、`t_years` | `option_chain.enrichment`（系统 2 编排） |
+| 曲面拟合、`smooth_iv`、跨到期插值 | IV Surface Engine（系统 3，见 `iv-surface-agent.mdc`） |
+| 运行时 `get_chain` 默认读已有列 | `option_chain.reader` / `runtime` |
+
+无效/过旧/价差异常盘口：**禁止** 静默填 `iv_quality=ok`；与 `project_rules.md` 一致。
+
+## 默认工作流
+
+```text
+确认分钟盘口齐全（系统 1 产出）
+  -> build_four_term_snapshot / enrichment
+  -> 校验 chain_quality / 列完整性
+  -> reader / runtime 对外提供 OptionChain
+```
+
+缺 `quotes/minute` 时：输出 **缺失 symbol 清单**，提示走系统 1 补拉；**不** 在本 Agent 内开并行 Tq 全量下载。
+
+## Agent 行为约束
+
+1. **不跳出本规则**：默认只谈链结构、快照 enrichment、内存查询；用户要下载/补拉时先确认是否 **改派系统 1**。
+2. **可引用、不执行**：`legacy_tq_mo`、旧项目路径仅作迁移参考，不作为新功能主路径。
+3. **沟通**：对用户用简体中文；标识符、CLI、列名用英文。
+4. **验证**：改 `option_chain` / `core` / 快照 enrichment 后跑 `pytest tests/test_option_chain_engine.py` 及相关用例，以及 `compileall option_platform scripts tests`。
+5. **测试**：链逻辑用合成 `core` 对象；**不** 把需 `TQ_USER`/`TQ_PASS` 的网络集成放进默认 `pytest`。
+
+## 与系统 1 规则的关系
+
+`market-data-agent.mdc` 只管 `quotes/minute/` 原始层。本 Agent 消费其产物，**不** 用分钟 `ok_ratio` 或下载 manifest 作为自己的完成标准；完成标准是 **快照可引擎直读** + **链查询行为稳定**（测试覆盖）。
+
+`option-data-platform.mdc` 描述全库数据中台；**本 Agent 只执行其中期权链 / 引擎就绪快照层**。
+
+enriched 快照就绪后，曲面构建与进度见 `docs/iv_surface_engine_plan.md`（系统 3，非本 Agent 任务）。

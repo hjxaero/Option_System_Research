@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+
+from option_platform.data.contracts import OptionContract, OptionType
 
 
 def extract_product_code(symbol: str) -> str:
@@ -25,26 +26,26 @@ def filter_option_symbols(symbols: Iterable[str], product: str) -> list[str]:
 def query_option_contracts_fast(
     api: object,
     product: str,
-    legacy_root: str | Path = r"E:\Option_Sell_Research",
+    legacy_root: str | None = None,
     batch_size: int = 50,
     verbose: bool = True,
-) -> list[object]:
+) -> list[OptionContract]:
     """Query option contract metadata in batches.
 
-    We reuse the old project's OptionContractInfo dataclass so legacy period
-    classification remains compatible, but avoid its slow per-symbol metadata
-    loop.
+    ``legacy_root`` is deprecated and ignored; kept for CLI compatibility.
     """
-    legacy_root = Path(legacy_root).resolve()
-    import sys
+    del legacy_root
 
-    if str(legacy_root) not in sys.path:
-        sys.path.insert(0, str(legacy_root))
-
-    from data.data_loader import OptionContractInfo
-
-    option_symbols = api.query_quotes(ins_class="OPTION")
-    filtered_symbols = filter_option_symbols(option_symbols, product)
+    symbol_set: set[str] = set()
+    for expired in (False, True):
+        try:
+            option_symbols = api.query_quotes(ins_class="OPTION", expired=expired)
+        except TypeError:
+            option_symbols = api.query_quotes(ins_class="OPTION")
+            symbol_set.update(filter_option_symbols(option_symbols, product))
+            break
+        symbol_set.update(filter_option_symbols(option_symbols, product))
+    filtered_symbols = sorted(symbol_set)
     if verbose:
         print(f"found {len(filtered_symbols)} {product.upper()} option symbols", flush=True)
     contracts: list[object] = []
@@ -69,9 +70,9 @@ def query_option_contracts_fast(
                 expiry_date = datetime.fromtimestamp(expire_dt).strftime("%Y-%m-%d")
 
             option_class = row.get("option_class", "")
-            option_type = "call" if option_class == "CALL" else "put"
+            option_type: OptionType = "call" if option_class == "CALL" else "put"
             contracts.append(
-                OptionContractInfo(
+                OptionContract(
                     symbol=row.get("instrument_id", ""),
                     name=row.get("instrument_name", ""),
                     underlying_symbol=underlying_symbol,

@@ -6,7 +6,7 @@
       "underlying_index": "SSE.000852",
       "pricing_future_product": "IM",
       "term_roles": ["current_month", "next_month", "current_quarter", "next_quarter"],
-      "snapshot_modes": ["four_term"],
+      "snapshot_modes": ["four_term", "four_term_enriched"],
       "bar_seconds": 60
     }
   },
@@ -15,7 +15,9 @@
     "ticks": "ticks/{product}/{symbol}/{trade_date}.parquet",
     "minute_quotes": "quotes/minute/{product}/{symbol}/{trade_date}.parquet",
     "snapshots": "snapshots/{mode}/{product}/{trade_date}.parquet",
-    "snapshot_partition": "snapshots/{mode}/{product}/{pricing_symbol}_{start}_{expiry}.parquet"
+    "snapshot_partition": "snapshots/{mode}/{product}/{pricing_symbol}_{start}_{expiry}.parquet",
+    "iv_surface_nodes": "surfaces/iv_nodes/{product}/{trade_date}.parquet",
+    "iv_surface_quality": "quality/iv_surface/{product}/{trade_date}.json"
   },
   "pricing_policy": {
     "preferred_price": "micro_or_mid_from_bid_ask",

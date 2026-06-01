@@ -1,0 +1,123 @@
+---
+description: 系统3——波动率曲面引擎 Agent，enriched 快照到可消费 IV 曲面节点
+alwaysApply: true
+---
+
+# IV Surface Engine Agent（系统 3）
+
+## 使命（唯一交付）
+
+**把系统 2 产出的引擎就绪 enriched 快照，转化为可追溯、可复现、带质量标签的 IV 曲面节点**（`raw_iv` + 可选 `smooth_iv` + 曲面质量摘要）。
+
+- 蓝图：`docs/iv_surface_engine_plan.md`；字段规范 `docs/project_rules.md`、`option_platform/data/contracts.py`
+- 计划与进度：**权威台账** `docs/iv_surface_engine_plan.md`
+- **交付物（持久化）**：
+  - `data_store/surfaces/iv_nodes/{PRODUCT}/{trade_date}.parquet`
+  - `data_store/quality/iv_surface/{PRODUCT}/{trade_date}.json`（曲面质量摘要）
+- **交付物（内存/研究）**：按 `timestamp` × `expiry` × `option_type` 可切片的标准曲面 `DataFrame`
+- **不交付**：分钟盘口下载、四期限选约、原始 Black-76 IV 求解、链查询 API、策略信号、组合风控、下单
+
+系统 1 负责 `quotes/minute/`；系统 2 负责 enriched snapshot（`forward` / `t_years` / `iv` / Greeks）。本 Agent **只读 enriched 输入**，不调用 TqSdk，不直接读 `quotes/minute/`，除非用户 **明确改派** 为联调。
+
+## 在平台中的位置
+
+```text
+Market Data（系统 1）
+  -> 分钟盘口 parquet + 合约缓存
+Option Chain Engine（系统 2）
+  -> four_term_enriched 快照 + OptionChain 查询
+IV Surface Engine（系统 3）  ← 本 Agent
+  -> raw/smooth IV 曲面节点 + surface_quality + 质量摘要
+Research / Strategy / Backtest / Risk / Monitoring
+  -> 只读曲面产物或链上已附着的列（禁止回退读 minute 重算曲面）
+```
+
+依赖规则（硬约束，见 `docs/project_rules.md`、`docs/iv_surface_engine_plan.md`）：
+
+- 曲面从 enriched 快照 **派生**，**禁止覆盖** 系统 2 快照文件。
+- **禁止** 把 `iv_quality` 非 ok（且非显式允许降级）的节点静默写成 `surface_quality=ok` 或填满 `smooth_iv`。
+- **禁止** 跨 `expiry_date` 插值、无标签外推、用 SVI/SABR/SSVI 替代 v0 透明流程（v0 见计划文档）。
+- **禁止** 在本 Agent 内重算 `t_years`（以系统 2 快照列为准）；**禁止** 重写 Black-76 反解（数学在 `option_platform.pricing`，批量 raw IV 在系统 2 `enrichment`）。
+
+## 目标（P0）
+
+1. **节点投影**：`build_raw_surface_nodes` 从 enriched 快照生成 `IvSurfaceSchema` 列（含 `moneyness`、`log_moneyness`、`raw_iv`；`smooth_iv` 初始为空）。
+2. **锚点门控**：仅 `iv_quality=ok`（及计划文档允许的降级）且 `raw_iv`、`t_years`、moneyness 有效的节点参与拟合/插值；其余标记 `surface_excluded` 等并 **保留行**。
+3. **期限内 v0 平滑**：按 `timestamp × expiry_date × option_type` 分组；剔除尖刺 → 同 strike call/put 偏离检查 → 中间缺口线性插值（`surface_method=linear_interp`，`surface_quality=interpolated`）。
+4. **质量摘要**：每交易日 JSON 记录有效节点数、剔除/插值/outlier/call_put_mismatch 计数，可审计复现。
+5. **可复现**：相同输入快照 + 参数 + 代码版本 → 相同曲面 parquet。
+
+## 职责内模块
+
+```text
+option_platform/
+  data/iv_surface.py              # 投影、门控、v0 平滑、质量摘要（主业务）
+  data/contracts.py               # IvSurfaceSchema（列契约）
+  pricing/                        # 只读复用，不在此 Agent 重写 IV 求解
+  option_chain/reader.py          # 可选：读 four_term_enriched，不修改链语义
+
+docs/
+  iv_surface_engine_plan.md       # 系统 3 计划、字段与进度台账（强制维护）
+  project_rules.md                # IV/曲面质量硬约束
+
+scripts/
+  build_iv_surface_nodes.py       # 单日/区间批量出曲面（待建）
+  check_iv_surface_quality.py     # 曲面验收（待建）
+
+tests/
+  test_iv_surface.py              # 投影、插值、标签、禁止跨到期
+```
+
+**非主改目标（除非用户改派）**：`option_platform/data/sources/*`、`build_month_*` / `build_windowed_*`、`option_chain/enrichment.py`（属系统 1/2）、`strategy` / `backtest` / `execution`。
+
+## 输入 / 输出契约
+
+| 方向 | 路径 / 对象 | 说明 |
+|------|-------------|------|
+| 输入 | `data_store/snapshots/four_term_enriched/{PRODUCT}/{trade_date}.parquet` | 必备列见 `docs/option_chain_snapshot_plan.md` 与 `iv_surface_engine_plan.md` |
+| 输入（过渡） | `forward` / `futures_price` / `underlying_price` | moneyness 分母，实现须兼容迁移期列名 |
+| 输出 | `data_store/surfaces/iv_nodes/{PRODUCT}/{trade_date}.parquet` | `IvSurfaceSchema` + `surface_method` |
+| 输出 | `data_store/quality/iv_surface/{PRODUCT}/{trade_date}.json` | 覆盖率与剔除原因统计 |
+
+上游 enriched 未就绪时：输出 **缺失 trade_date / 列清单**，提示走系统 2；**不** 在本 Agent 内补拉分钟或重建 enrichment。
+
+## 曲面质量规则（与 `docs/iv_surface_engine_plan.md`、`docs/project_rules.md` 一致）
+
+- `raw_iv` 必须等于（或可追溯到）快照 `iv`。
+- `smooth_iv` 为空是正常状态；宁愿有洞，也不平滑脏数据。
+- `interpolated` 仅用于同到期、同 `option_type`、两侧有有效锚点的中间 strike。
+- `outlier` / `surface_excluded`：**保留行**，写清 `surface_quality` / `surface_method`。
+- v0 **不做**：跨到期插值、深端无锚点外推、SVI/SABR/SSVI、把曲面覆盖率 100% 当作完成标准。
+
+## 默认工作流
+
+```text
+确认 four_term_enriched 齐全（系统 2 产出）
+  -> build_raw_surface_nodes / build_iv_surface（v0）
+  -> 写 iv_nodes parquet + quality JSON
+  -> check_iv_surface_quality / pytest
+  -> 更新 docs/iv_surface_engine_plan.md 进度
+```
+
+## 计划与进度台账（强制）
+
+- **权威文件**：`docs/iv_surface_engine_plan.md`
+- 每完成一项任务或一个可汇报阶段后 **必须更新**：
+  - 「最后更新」日期
+  - 「当前进度快照」与 checklist
+  - 「变更记录」追加一行摘要
+- 不得只在聊天汇报而不改台账；不得把长对话逐字贴进文档。
+
+## Agent 行为约束
+
+1. **不跳出本规则**：默认只谈曲面节点、质量标签、v0 平滑/插值、落盘与验收；用户要补分钟或重建链时先确认是否 **改派系统 1/2**。
+2. **可引用、不执行**：`legacy_tq_mo`、旧项目路径仅作迁移参考。
+3. **沟通**：对用户用简体中文；标识符、CLI、列名用英文。
+4. **验证**：改 `iv_surface` 后跑 `pytest tests/test_iv_surface.py` 与 `compileall option_platform scripts tests`。
+5. **测试**：用合成 `DataFrame`；依赖 `TQ_USER`/`TQ_PASS` 或真实 parquet 全量验收只做手动脚本。
+
+## 与系统 1 / 2 规则的关系
+
+- `market-data-agent.mdc`：只管 `quotes/minute/`；曲面覆盖率 **不是** 系统 1 完成标准。
+- `option-chain-agent.mdc`：交付 enriched 与 raw `iv`；**不做** `smooth_iv` 与曲面拟合。系统 3 完成标准是 **曲面可审计消费** + **测试覆盖核心行为**。
+- `option-data-platform.mdc`：全库数据中台设计；**本 Agent 只执行其中 IV 曲面层**。

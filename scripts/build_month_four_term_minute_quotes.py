@@ -16,11 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from option_platform.common.settings import PlatformPaths
+from option_platform.data.contracts import OptionContract
 from option_platform.data.contract_dates import filter_dates_by_first_valid, load_first_valid_date_cache
 from option_platform.data.live_update import (
     minute_quote_path,
     should_skip_minute_quote_update,
-    update_daily_minute_quotes,
+    update_symbol_range_minute_quotes,
 )
 from option_platform.data.quality.minute_quote_report import write_quality_report
 from option_platform.data.sources.tq import tq_api
@@ -40,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbols-file", help="Text/CSV file containing symbols to download.")
     parser.add_argument("--max-contracts", type=int, default=0, help="0 means all symbols in range.")
     parser.add_argument("--max-quote-age-ms", type=int, default=60_000)
-    parser.add_argument("--workers", type=int, default=6, help="Parallel TqApi workers (default: 6).")
+    parser.add_argument("--workers", type=int, default=4, help="Parallel TqApi workers (default: 4).")
     parser.add_argument("--retry-attempts", type=int, default=2, help="Attempts per symbol-day before marking failure.")
     parser.add_argument("--retry-sleep-seconds", type=float, default=2.0)
     parser.add_argument("--first-valid-date-cache", help="JSON map symbol -> first valid quote date.")
@@ -98,22 +99,14 @@ def load_symbol_filter(symbols: str | None, symbols_file: str | None) -> set[str
 def load_or_query_contracts(
     api: object,
     product: str,
-    legacy_root: Path,
     data_root: Path,
     refresh: bool,
-) -> list[object]:
+) -> list[OptionContract]:
     cache_file = contract_cache_path(data_root, product)
     if cache_file.exists() and not refresh:
         payload = json.loads(cache_file.read_text(encoding="utf-8"))
-        import sys
-
-        legacy_root_str = str(legacy_root)
-        if legacy_root_str not in sys.path:
-            sys.path.insert(0, legacy_root_str)
-        from data.data_loader import OptionContractInfo
-
         return [
-            OptionContractInfo(
+            OptionContract(
                 symbol=item["symbol"],
                 name=item.get("name", ""),
                 underlying_symbol=item.get("underlying_symbol", ""),
@@ -129,7 +122,7 @@ def load_or_query_contracts(
             for item in payload
         ]
 
-    contracts = query_option_contracts_fast(api, product, legacy_root=legacy_root)
+    contracts = query_option_contracts_fast(api, product)
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     serializable = []
     for contract in contracts:
@@ -203,41 +196,61 @@ def _load_range_quotes(data_root: Path, product: str, dates: list[str]) -> pd.Da
 def _symbol_daily_job(payload: dict) -> dict:
     symbol = payload["symbol"]
     trade_dates = payload["trade_dates"]
+    pending_dates: list[str] = []
     saved = 0
     skipped = 0
     failures: list[str] = []
+    for trade_date in trade_dates:
+        output = minute_quote_path(
+            payload["data_root"],
+            payload["product"],
+            symbol,
+            trade_date,
+        )
+        if payload["skip_complete"] and should_skip_minute_quote_update(output):
+            skipped += 1
+            continue
+        pending_dates.append(trade_date)
+
+    if not pending_dates:
+        return {
+            "symbol": symbol,
+            "saved": saved,
+            "skipped": skipped,
+            "failures": failures,
+            "error": None,
+        }
+
     try:
         with tq_api() as api:
-            for trade_date in trade_dates:
-                output = minute_quote_path(
-                    payload["data_root"],
-                    payload["product"],
-                    symbol,
-                    trade_date,
+            remaining_dates = pending_dates
+            for attempt in range(1, payload["retry_attempts"] + 1):
+                if not remaining_dates:
+                    break
+                attempt_saved, _attempt_skipped, attempt_failures = update_symbol_range_minute_quotes(
+                    api=api,
+                    data_root=payload["data_root"],
+                    product=payload["product"],
+                    symbol=symbol,
+                    trade_dates=remaining_dates,
+                    max_quote_age_ms=payload["max_quote_age_ms"],
+                    skip_if_complete=False,
                 )
-                if payload["skip_complete"] and should_skip_minute_quote_update(output):
-                    skipped += 1
-                    continue
-                last_error = None
-                for attempt in range(1, payload["retry_attempts"] + 1):
-                    try:
-                        update_daily_minute_quotes(
-                            api=api,
-                            data_root=payload["data_root"],
-                            product=payload["product"],
-                            symbol=symbol,
-                            trade_date=trade_date,
-                            max_quote_age_ms=payload["max_quote_age_ms"],
-                        )
-                        saved += 1
-                        last_error = None
-                        break
-                    except Exception as exc:
-                        last_error = exc
-                        if attempt < payload["retry_attempts"]:
-                            sleep(payload["retry_sleep_seconds"])
-                if last_error is not None:
-                    failures.append(f"{trade_date}: {last_error}")
+                saved += attempt_saved
+                if not attempt_failures:
+                    remaining_dates = []
+                    break
+                if attempt < payload["retry_attempts"]:
+                    failed_dates = []
+                    for failure in attempt_failures:
+                        trade_date, _, _message = failure.partition(": ")
+                        if trade_date:
+                            failed_dates.append(trade_date)
+                    remaining_dates = failed_dates
+                    sleep(payload["retry_sleep_seconds"])
+                else:
+                    failures.extend(attempt_failures)
+
         return {
             "symbol": symbol,
             "saved": saved,
@@ -249,7 +262,7 @@ def _symbol_daily_job(payload: dict) -> dict:
         return {
             "symbol": symbol,
             "saved": 0,
-            "skipped": 0,
+            "skipped": skipped,
             "failures": failures,
             "error": str(exc),
         }
@@ -259,7 +272,6 @@ def main() -> None:
     args = parse_args()
     paths = PlatformPaths.from_root(PROJECT_ROOT)
     dates = trading_days(args.start, args.end)
-    legacy_root = Path(args.legacy_root).resolve()
     report_dir = (
         Path(args.output_dir)
         if args.output_dir
@@ -273,7 +285,6 @@ def main() -> None:
         contracts = load_or_query_contracts(
             api,
             args.product,
-            legacy_root,
             paths.data_root,
             args.refresh_contracts,
         )
@@ -381,6 +392,7 @@ def main() -> None:
                 }
             )
     if failure_rows:
+        report_dir.mkdir(parents=True, exist_ok=True)
         failure_path = report_dir / f"{prefix}_failures.csv"
         pd.DataFrame(failure_rows).to_csv(failure_path, index=False, encoding="utf-8-sig")
         print(f"failures={len(failure_rows)} failure_plan={failure_path}", flush=True)

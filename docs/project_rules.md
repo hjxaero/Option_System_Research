@@ -165,7 +165,7 @@ IV 和 Greeks 的价格输入优先来自盘口，不优先用最新价。
 3. 盘口无效、过旧或价差异常时静默填充为正常值。
 4. 标准快照表必须保存 `mark_price`，不能只保存旧式 `price` 字段。
 
-详细设计见 `docs/iv_surface_pipeline.md`。
+曲面字段与质量标签见 `docs/iv_surface_engine_plan.md` 与 `option_platform/data/contracts.py`（`IvSurfaceSchema`）。
 
 ## 8. IV 缺失规则
 

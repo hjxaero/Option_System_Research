@@ -23,9 +23,14 @@ TICK_COLUMNS = [
 
 def normalize_tq_datetime(frame: pd.DataFrame, column: str = "datetime") -> pd.DataFrame:
     result = frame.copy()
-    result[column] = pd.to_datetime(result[column], unit="ns", utc=True).dt.tz_convert(
-        "Asia/Shanghai"
-    ).dt.tz_localize(None)
+    values = result[column]
+    if pd.api.types.is_integer_dtype(values):
+        parsed = pd.to_datetime(values, unit="ns", utc=True)
+    else:
+        parsed = pd.to_datetime(values, utc=True)
+    result[column] = (
+        parsed.dt.tz_convert("Asia/Shanghai").dt.tz_localize(None).astype("datetime64[ns]")
+    )
     return result
 
 

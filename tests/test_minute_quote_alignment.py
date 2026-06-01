@@ -49,6 +49,24 @@ def test_align_ticks_to_minutes_uses_last_quote_before_target():
     assert aligned.iloc[1]["quote_quality"] == "ok"
 
 
+def test_align_ticks_to_minutes_accepts_microsecond_quote_timestamps():
+    ticks = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-05-27 09:30:00"]).astype("datetime64[us]"),
+            "last_price": [10.0],
+            "bid_price1": [9.9],
+            "ask_price1": [10.1],
+            "bid_volume1": [1],
+            "ask_volume1": [1],
+        }
+    )
+    targets = pd.DataFrame({"target_time": pd.to_datetime(["2026-05-27 09:30:00"])})
+
+    aligned = align_ticks_to_minutes(ticks, targets, max_quote_age_ms=60_000)
+
+    assert aligned.iloc[0]["quote_quality"] == "ok"
+
+
 def test_align_ticks_to_minutes_marks_stale_quotes():
     ticks = pd.DataFrame(
         {

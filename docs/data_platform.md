@@ -76,12 +76,14 @@ data_store/
   ticks/{product}/{symbol}/{trade_date}.parquet
   quotes/minute/{product}/{symbol}/{trade_date}.parquet
   snapshots/four_term/{product}/{trade_date}.parquet
+  snapshots/four_term_enriched/{product}/{trade_date}.parquet
+  surfaces/iv_nodes/{product}/{trade_date}.parquet
+  quality/iv_surface/{product}/{trade_date}.json
   quality/{product}/{trade_date}.json
 ```
 
-旧项目规则提炼见 [legacy_rules_summary.md](legacy_rules_summary.md)，当前项目独立规则见 [project_rules.md](project_rules.md)。
-
-期权快照清洗与 IV 曲面设计见 [iv_surface_pipeline.md](iv_surface_pipeline.md)。
+平台规则见 [project_rules.md](project_rules.md)。  
+系统 2 快照见 [option_chain_snapshot_plan.md](option_chain_snapshot_plan.md)；系统 3 计划与进度见 [iv_surface_engine_plan.md](iv_surface_engine_plan.md)。
 
 ## 盘中更新
 

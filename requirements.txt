@@ -3,4 +3,5 @@ pandas
 pyarrow
 tqdm
 tqsdk
+pytest
 
