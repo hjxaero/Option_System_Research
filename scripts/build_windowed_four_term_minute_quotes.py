@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end", required=True, help="Overall range end, YYYY-MM-DD")
     parser.add_argument("--window-days", type=int, default=10, help="Calendar days per chunk (default: 10).")
     parser.add_argument("--product", default="MO")
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--max-contracts", type=int, default=0)
     parser.add_argument("--retry-attempts", type=int, default=3)
     parser.add_argument("--retry-sleep-seconds", type=float, default=3.0)
@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="When slowdown/failures are detected, reduce workers for later windows (default: true).",
     )
-    parser.add_argument("--min-workers", type=int, default=4, help="Lower bound for auto-reduced workers.")
+    parser.add_argument("--min-workers", type=int, default=2, help="Lower bound for auto-reduced workers.")
     parser.add_argument(
         "--performance-factor",
         type=float,

@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from option_platform.option_chain.enrichment import _assign_bucket_mapping, enrich_snapshot_frame
+from option_platform.option_chain.enrichment import _assign_bucket_mapping, enrich_snapshot_frame, recompute_bucket_mapping
 from option_platform.option_chain.reader import OptionChainSnapshotReader
 
 
@@ -95,6 +95,10 @@ def test_enrich_snapshot_frame_writes_engine_ready_fields():
     assert "bucket_ids" in enriched.columns
     assert "bucket_primary" in enriched.columns
     assert "delta_bucket" in enriched.columns
+    assert "bucket_target_delta" in enriched.columns
+    assert "bucket_delta_error" in enriched.columns
+    assert "bucket_quality" in enriched.columns
+    assert "bucket_quality_reason" in enriched.columns
     assert "is_atm_straddle_candidate" in enriched.columns
     assert "straddle_candidate_id" in enriched.columns
     assert enriched["forward"].iloc[0] == pytest.approx(102.0)
@@ -124,6 +128,7 @@ def test_enrich_snapshot_frame_assigns_bucket_mapping_and_straddle_candidate():
     assert "current_month_50D_put" in bucket_ids
     assert int(enriched["is_atm_straddle_candidate"].sum()) == 2
     assert enriched["straddle_candidate_id"].dropna().nunique() == 1
+    assert set(enriched["bucket_quality"].dropna().unique()) <= {"ok", "loose", "bad"}
 
 
 def test_bucket_mapping_selects_atm_straddle_by_forward_nearest_common_strike():
@@ -152,6 +157,37 @@ def test_bucket_mapping_selects_atm_straddle_by_forward_nearest_common_strike():
     assert "current_month_ATM_call" in bucket_ids
     assert "current_month_ATM_put" in bucket_ids
     assert "current_month_50D_call" not in bucket_ids
+    call = straddle[straddle["option_type"] == "call"].iloc[0]
+    put = straddle[straddle["option_type"] == "put"].iloc[0]
+    assert call["bucket_target_delta"] == pytest.approx(0.50)
+    assert call["bucket_delta_error"] == pytest.approx(0.11)
+    assert call["bucket_quality"] == "bad"
+    assert put["bucket_target_delta"] == pytest.approx(-0.25)
+    assert put["bucket_delta_error"] == pytest.approx(0.06)
+    assert put["bucket_quality"] == "loose"
+
+
+def test_recompute_bucket_mapping_preserves_pricing_fields():
+    enriched = enrich_snapshot_frame(_snapshot_frame_with_four_pairs(), risk_free_rate=0.0)
+    stale = enriched.copy()
+    stale["bucket_ids"] = pd.NA
+    stale["bucket_primary"] = pd.NA
+    stale["bucket_count"] = 0
+    stale["delta_bucket"] = pd.NA
+    stale["bucket_target_delta"] = pd.NA
+    stale["bucket_delta_error"] = pd.NA
+    stale["bucket_quality"] = pd.NA
+    stale["bucket_quality_reason"] = pd.NA
+    stale["is_atm_straddle_candidate"] = False
+    stale["straddle_candidate_id"] = pd.NA
+
+    recomputed = recompute_bucket_mapping(stale)
+
+    for column in ("iv", "delta", "gamma", "theta", "vega", "rho", "forward", "resolved_forward", "t_years"):
+        pd.testing.assert_series_equal(recomputed[column], stale[column], check_names=False)
+    assert recomputed["bucket_primary"].notna().sum() > 0
+    assert recomputed["bucket_quality"].notna().sum() > 0
+    assert int(recomputed["is_atm_straddle_candidate"].sum()) == 2
 
 
 def test_enrich_snapshot_frame_marks_degraded_mark_quality():
@@ -218,6 +254,19 @@ def test_enrich_snapshot_frame_uses_trading_minute_time_decay():
     t_0931 = enriched[enriched["timestamp"] == pd.Timestamp("2022-07-22 09:31:00")]["t_years"].iloc[0]
 
     assert t_0930 - t_0931 == pytest.approx(1 / (252 * 240))
+
+
+def test_enrich_snapshot_frame_tags_last_three_trading_days():
+    enriched = enrich_snapshot_frame(
+        _snapshot_frame().assign(timestamp=pd.Timestamp("2022-08-17 09:30:00")),
+        risk_free_rate=0.0,
+        trading_days=["2022-08-17", "2022-08-18", "2022-08-19"],
+    )
+
+    assert enriched["remaining_trading_minutes"].iloc[0] == 720
+    assert enriched["trading_days_to_expiry"].iloc[0] == 3
+    assert enriched["expiry_phase"].dropna().unique().tolist() == ["last_3_trading_days"]
+    assert enriched["expiry_phase_rank"].dropna().unique().tolist() == [1]
 
 
 def test_enrich_snapshot_frame_extends_trading_days_to_cover_far_expiry():

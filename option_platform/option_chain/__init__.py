@@ -5,6 +5,7 @@ from option_platform.option_chain.chain import OptionChain
 from option_platform.option_chain.strategy_candidates import (
     build_strategy_candidate_quality_report,
     build_strategy_candidates,
+    prepare_strategy_candidates_for_storage,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "build_option_chain",
     "build_strategy_candidate_quality_report",
     "build_strategy_candidates",
+    "prepare_strategy_candidates_for_storage",
 ]

@@ -32,7 +32,7 @@
 - [x] 单窗下载 `build_month_four_term_minute_quotes.py`（worker 内 **跨日** `update_symbol_range_minute_quotes`）
 - [x] `--skip-complete`、manifest 续跑、`first_valid_dates.json`
 - [x] 质量：`generate_repair_plan` / `repair_minute_quotes_from_plan`
-- [x] 默认 `workers=4`，`min-workers=4`；`caffeinate -dims` 长跑建议
+- [x] 默认 `workers=2`，`min-workers=2`（减轻 Tq auth 并发超时）；`caffeinate -dims` 长跑建议
 
 ### 阶段 B — 全历史分钟盘口下载（进行中）
 
@@ -238,3 +238,4 @@ bash scripts/start_mo_download_with_watchdog.sh
 | 2026-06-02 | 看门狗：重启下载前 `pkill` 项目 venv 的 orphan `multiprocessing` worker（缓解多窗后降速） |
 | 2026-06-02 | `option_platform/common/process_pool.py`：`build_month` / repair 进程池 SIGTERM 时 `shutdown(cancel_futures=True)`，减少 orphan worker 根因 |
 | 2026-06-02 | 新增 `scripts/launch_mo_download_daemon.py`：用 `start_new_session=True` 完全脱离会话拉起 下载/看门狗/孤儿监控（macOS 无 `setsid`，旧 `nohup &` 会随 shell 退出被杀）；`--restart` 先清理旧进程与 orphan worker。`launch_mo_download_daemon.sh` 改为薄包装委托该脚本 |
+| 2026-06-03 | 默认并发 **4→2**（`build_windowed` / `build_month` / launcher / repair / watchdog 入口）；窗 36–57 失败 **99%** 为 `auth.shinnytech.com` ConnectTimeout，降 worker 减轻鉴权重试 |

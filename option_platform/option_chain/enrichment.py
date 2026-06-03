@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import exp, isfinite, log
+from math import ceil, exp, isfinite, log
 
 import pandas as pd
 
@@ -159,6 +159,40 @@ def _row_quality_fields(row: pd.Series) -> dict[str, object]:
     }
 
 
+def _expiry_timing_fields(t_years: float | None) -> dict[str, object]:
+    if t_years is None or pd.isna(t_years):
+        return {
+            "remaining_trading_minutes": None,
+            "trading_days_to_expiry": None,
+            "expiry_phase": "unknown",
+            "expiry_phase_rank": None,
+            "expiry_phase_reason": "missing_time_to_expiry",
+        }
+
+    remaining_minutes = max(int(round(float(t_years) * 252 * 240)), 0)
+    trading_days = int(ceil(remaining_minutes / 240)) if remaining_minutes > 0 else 0
+    if remaining_minutes <= 240:
+        phase = "final_trading_day"
+        rank = 2
+        reason = "remaining_trading_minutes_lte_240"
+    elif remaining_minutes <= 3 * 240:
+        phase = "last_3_trading_days"
+        rank = 1
+        reason = "remaining_trading_minutes_lte_720"
+    else:
+        phase = "normal"
+        rank = 0
+        reason = "remaining_trading_minutes_gt_720"
+
+    return {
+        "remaining_trading_minutes": remaining_minutes,
+        "trading_days_to_expiry": trading_days,
+        "expiry_phase": phase,
+        "expiry_phase_rank": rank,
+        "expiry_phase_reason": reason,
+    }
+
+
 def _strategy_candidate_fields(
     *,
     row_quality: dict[str, object],
@@ -229,15 +263,40 @@ def _bucket_label(term_role: str, name: str, right: str) -> str:
     return f"{term_role}_{name}_{right}"
 
 
-def _append_bucket(result: pd.DataFrame, index: object, bucket_id: str, delta_bucket: str, rank: int) -> None:
+def _bucket_quality(delta_error: float | None) -> tuple[str | None, str | None]:
+    if delta_error is None or pd.isna(delta_error):
+        return None, None
+    if delta_error <= 0.05:
+        return "ok", "delta_error_lte_0.05"
+    if delta_error <= 0.10:
+        return "loose", "delta_error_lte_0.10"
+    return "bad", "delta_error_gt_0.10"
+
+
+def _append_bucket(
+    result: pd.DataFrame,
+    index: object,
+    bucket_id: str,
+    delta_bucket: str,
+    rank: int,
+    target_delta: float,
+    reason: str,
+) -> None:
     existing = result.at[index, "bucket_ids"]
     result.at[index, "bucket_ids"] = bucket_id if pd.isna(existing) or not existing else f"{existing};{bucket_id}"
     result.at[index, "bucket_count"] = int(result.at[index, "bucket_count"]) + 1
     if pd.isna(result.at[index, "bucket_primary"]):
+        delta = result.at[index, "delta"]
+        delta_error = None if delta is None or pd.isna(delta) else abs(float(delta) - float(target_delta))
+        quality, quality_reason = _bucket_quality(delta_error)
         result.at[index, "bucket_primary"] = bucket_id
         result.at[index, "delta_bucket"] = delta_bucket
         result.at[index, "bucket_selection_rank"] = rank
-        result.at[index, "bucket_selection_reason"] = "delta_closest"
+        result.at[index, "bucket_selection_reason"] = reason
+        result.at[index, "bucket_target_delta"] = float(target_delta)
+        result.at[index, "bucket_delta_error"] = delta_error
+        result.at[index, "bucket_quality"] = quality
+        result.at[index, "bucket_quality_reason"] = quality_reason
 
 
 def _bucket_candidate_score(frame: pd.DataFrame, target_delta: float) -> pd.Series:
@@ -279,16 +338,26 @@ def _atm_strike_pair(eligible: pd.DataFrame, forward: float | None) -> tuple[obj
     return call_index, put_index
 
 
+BUCKET_MAPPING_COLUMNS = [
+    "bucket_ids",
+    "bucket_primary",
+    "bucket_count",
+    "delta_bucket",
+    "bucket_selection_rank",
+    "bucket_selection_reason",
+    "bucket_target_delta",
+    "bucket_delta_error",
+    "bucket_quality",
+    "bucket_quality_reason",
+    "is_atm_straddle_candidate",
+    "straddle_candidate_id",
+]
+
+
 def _assign_bucket_mapping(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
-    result["bucket_ids"] = pd.NA
-    result["bucket_primary"] = pd.NA
-    result["bucket_count"] = 0
-    result["delta_bucket"] = pd.NA
-    result["bucket_selection_rank"] = pd.NA
-    result["bucket_selection_reason"] = pd.NA
-    result["is_atm_straddle_candidate"] = False
-    result["straddle_candidate_id"] = pd.NA
+    for column in BUCKET_MAPPING_COLUMNS:
+        result[column] = False if column == "is_atm_straddle_candidate" else 0 if column == "bucket_count" else pd.NA
 
     if result.empty or "delta" not in result.columns:
         return result
@@ -316,13 +385,13 @@ def _assign_bucket_mapping(frame: pd.DataFrame) -> pd.DataFrame:
                 continue
             selected_index = _bucket_candidate_score(side, target_delta).idxmin()
             bucket_id = _bucket_label(term_role, name, right)
-            _append_bucket(result, selected_index, bucket_id, delta_bucket, 1)
+            _append_bucket(result, selected_index, bucket_id, delta_bucket, 1, target_delta, "delta_closest")
 
         atm_pair = _atm_strike_pair(eligible, _resolved_forward(expiry_group))
         if atm_pair is not None:
             call_index, put_index = atm_pair
-            _append_bucket(result, call_index, _bucket_label(term_role, "ATM", "call"), "ATM_call", 1)
-            _append_bucket(result, put_index, _bucket_label(term_role, "ATM", "put"), "ATM_put", 1)
+            _append_bucket(result, call_index, _bucket_label(term_role, "ATM", "call"), "ATM_call", 1, 0.50, "forward_nearest_common_strike")
+            _append_bucket(result, put_index, _bucket_label(term_role, "ATM", "put"), "ATM_put", 1, -0.50, "forward_nearest_common_strike")
             strike = float(result.loc[call_index, "strike_price"])
             timestamp = pd.Timestamp(result.loc[call_index, "timestamp"]).strftime("%Y%m%d%H%M%S")
             straddle_id = f"{timestamp}_{term_role}_{pd.Timestamp(expiry).strftime('%Y%m%d')}_{strike:g}_ATM_straddle"
@@ -331,6 +400,27 @@ def _assign_bucket_mapping(frame: pd.DataFrame) -> pd.DataFrame:
                 result.at[index, "straddle_candidate_id"] = straddle_id
 
     return result
+
+
+def recompute_bucket_mapping(frame: pd.DataFrame) -> pd.DataFrame:
+    """Recompute only bucket-mapping fields for an enriched snapshot frame.
+
+    This is intentionally separated from IV/Greeks enrichment so bucket,
+    straddle, and strategy-selection rule changes can be replayed quickly
+    without repricing the option chain.
+    """
+    if frame.empty:
+        return frame.copy()
+    if "timestamp" not in frame.columns:
+        return _assign_bucket_mapping(frame)
+
+    original_columns = list(frame.columns)
+    frames = [_assign_bucket_mapping(group) for _, group in frame.groupby("timestamp", sort=True)]
+    result = pd.concat(frames, ignore_index=True, sort=False)
+    for column in original_columns:
+        if column not in result.columns:
+            result[column] = pd.NA
+    return result[list(dict.fromkeys([*original_columns, *BUCKET_MAPPING_COLUMNS]))]
 
 
 def _greeks_quality(
@@ -642,6 +732,7 @@ def enrich_snapshot_timestamp(
             if forward_info:
                 fields.update(_forward_diagnostic_fields(forward_info))
                 fields["t_years"] = forward_info["t_years"]
+                fields.update(_expiry_timing_fields(forward_info["t_years"]))
             fields.update(_contract_multiplier_fields(row))
             row_quality = _row_quality_fields(row)
             fields.update(row_quality)
@@ -702,6 +793,7 @@ def enrich_snapshot_timestamp(
                     row=row,
                 ),
                 "t_years": t_years,
+                **_expiry_timing_fields(t_years),
                 "iv": iv.implied_volatility,
                 "delta": None if greeks is None else greeks.delta,
                 "gamma": None if greeks is None else greeks.gamma,
@@ -811,6 +903,11 @@ def _empty_pricing_fields(iv_quality: str, pricing_model: str) -> dict[str, obje
         "forward_basis_abs": None,
         "forward_basis_bps": None,
         "t_years": None,
+        "remaining_trading_minutes": None,
+        "trading_days_to_expiry": None,
+        "expiry_phase": None,
+        "expiry_phase_rank": None,
+        "expiry_phase_reason": None,
         "contract_multiplier": None,
         "standard_contract_multiplier": None,
         "adjusted_contract_multiplier": None,
@@ -846,6 +943,10 @@ def _empty_pricing_fields(iv_quality: str, pricing_model: str) -> dict[str, obje
         "delta_bucket": None,
         "bucket_selection_rank": None,
         "bucket_selection_reason": None,
+        "bucket_target_delta": None,
+        "bucket_delta_error": None,
+        "bucket_quality": None,
+        "bucket_quality_reason": None,
         "is_atm_straddle_candidate": False,
         "straddle_candidate_id": None,
         "pricing_model": pricing_model,

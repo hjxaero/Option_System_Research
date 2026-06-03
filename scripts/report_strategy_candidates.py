@@ -11,10 +11,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from option_platform.option_chain.reader import OptionChainSnapshotReader
+from option_platform.option_chain.strategy_candidates import build_strategy_candidate_quality_report
 
 
 def strategy_quality_path(snapshot_path: Path) -> Path:
     return snapshot_path.with_suffix(".strategy_quality.parquet")
+
+
+def strategy_candidates_path(snapshot_path: Path) -> Path:
+    return snapshot_path.with_suffix(".strategy_candidates.parquet")
 
 
 def write_parquet_atomic(frame: pd.DataFrame, output: Path) -> None:
@@ -39,13 +44,15 @@ def selected_dates(dates: list[str], start: str | None, end: str | None, max_day
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build strategy-candidate quality reports from enriched snapshots.")
+    parser = argparse.ArgumentParser(description="Build strategy-candidate sidecars from enriched snapshots.")
     parser.add_argument("--product", default="MO")
     parser.add_argument("--data-root", type=Path, default=Path("data_store"))
     parser.add_argument("--snapshot-kind", default="four_term_enriched_month_trial")
     parser.add_argument("--start")
     parser.add_argument("--end")
     parser.add_argument("--max-days", type=int, default=0)
+    parser.add_argument("--no-candidates", action="store_true")
+    parser.add_argument("--no-quality", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
@@ -54,16 +61,28 @@ def main() -> None:
 
     for trade_date in dates:
         snapshot_path = reader.snapshot_path(args.product, trade_date)
-        output = strategy_quality_path(snapshot_path)
-        if output.exists() and not args.force:
-            print(f"{trade_date} skipped existing {output}")
+        candidates_output = strategy_candidates_path(snapshot_path)
+        quality_output = strategy_quality_path(snapshot_path)
+        outputs = []
+        if not args.no_candidates:
+            outputs.append(candidates_output)
+        if not args.no_quality:
+            outputs.append(quality_output)
+        if outputs and all(output.exists() for output in outputs) and not args.force:
+            print(f"{trade_date} skipped existing {', '.join(str(output) for output in outputs)}")
             continue
-        report = reader.get_strategy_candidate_quality_report(args.product, trade_date)
-        write_parquet_atomic(report, output)
+        candidates = reader.get_strategy_candidates_for_storage(args.product, trade_date)
+        report = build_strategy_candidate_quality_report(candidates, product=args.product, trade_date=trade_date)
+        if not args.no_candidates:
+            write_parquet_atomic(candidates, candidates_output)
+        if not args.no_quality:
+            write_parquet_atomic(report, quality_output)
         overall = report[report["scope"] == "overall"].iloc[0] if not report.empty else {}
         print(
             f"{trade_date} candidates={int(overall.get('candidate_count', 0))} "
-            f"ok_ratio={float(overall.get('ok_ratio', 0.0)):.2%} output={output}"
+            f"ok_ratio={float(overall.get('ok_ratio', 0.0)):.2%} "
+            f"candidates_output={candidates_output if not args.no_candidates else 'disabled'} "
+            f"quality_output={quality_output if not args.no_quality else 'disabled'}"
         )
 
 

@@ -148,6 +148,10 @@ Required time fields:
 - `trading_days_to_expiry`
 - `calendar_days_to_expiry`
 - `time_to_expiry`
+- `t_years`
+- `expiry_phase`
+- `expiry_phase_rank`
+- `expiry_phase_reason`
 - `time_to_expiry_convention`
 
 Required convention value:
@@ -164,6 +168,25 @@ T(09:30) - T(09:31) = 1 / (252 * 240)
 
 No downstream module may independently recalculate T or use calendar-day
 approximations for pricing.
+
+Expiry-phase tagging:
+
+```text
+normal:
+  remaining_trading_minutes > 720
+
+last_3_trading_days:
+  240 < remaining_trading_minutes <= 720
+
+final_trading_day:
+  remaining_trading_minutes <= 240
+```
+
+These tags are stored on enriched option-chain rows and propagated to strategy
+candidates as `candidate_expiry_phase`. They are statistical segmentation tags,
+not automatic bad-data labels. The final three trading days should be analyzed
+separately because theta and gamma dominate and naturally amplify delta, bucket,
+and IV/Greeks instability.
 
 ### Enriched Snapshot Production
 
@@ -1034,6 +1057,10 @@ Deliverables:
 - `bucket_count`;
 - `bucket_selection_rank`;
 - `bucket_selection_reason`;
+- `bucket_target_delta`;
+- `bucket_delta_error`;
+- `bucket_quality`;
+- `bucket_quality_reason`;
 - `is_atm_straddle_candidate`;
 - `straddle_candidate_id`.
 
@@ -1089,6 +1116,133 @@ Interpretation: front-month and next-month bucket coverage is stable. Far-quarte
 coverage is lower on this early MO sample because some contracts were newly
 listed and did not have enough current-minute two-sided tradable marks.
 
+#### Bucket Fast Recompute
+
+Status: implemented.
+
+Bucket mapping is now separated from IV/Greeks enrichment:
+
+```text
+existing enriched snapshot
+  -> recompute_bucket_mapping
+  -> same enriched snapshot with refreshed bucket fields
+  -> refreshed quality/meta sidecars
+  -> refreshed strategy quality sidecar
+```
+
+Implemented entry points:
+
+```text
+option_platform.option_chain.enrichment.recompute_bucket_mapping(...)
+scripts/recompute_bucket_mapping.py
+```
+
+The fast recompute step changes only:
+
+- `bucket_ids`;
+- `bucket_primary`;
+- `bucket_count`;
+- `delta_bucket`;
+- `bucket_selection_rank`;
+- `bucket_selection_reason`;
+- `bucket_target_delta`;
+- `bucket_delta_error`;
+- `bucket_quality`;
+- `bucket_quality_reason`;
+- `is_atm_straddle_candidate`;
+- `straddle_candidate_id`.
+
+It must not recalculate or change:
+
+- `mark_price`;
+- `forward` / `resolved_forward`;
+- `time_to_expiry` / `t_years`;
+- `iv`;
+- Greeks.
+
+Validation:
+
+```text
+MO 2022-08-10 fast recompute:
+rows: 47432
+bucket_rows: 4216
+atm_straddles: 951
+non-bucket pricing fields unchanged: true
+```
+
+First-month fast recompute:
+
+```text
+date range: 2022-07-22 to 2022-08-19
+trading days: 21
+rows: 996072
+elapsed: about 58 seconds
+bucket_candidate_rows: 84550
+atm_straddle_count: 18783
+front_two_straddle_count: 9960
+```
+
+Important implementation note:
+
+`value_counts` sidecar writers must aggregate all null-like keys into one
+`null` bucket. Pandas can produce both `<NA>` and `NaN` keys after mixed
+Parquet/string operations.
+
+#### Bucket Quality Diagnostics
+
+Status: implemented.
+
+Bucket rows now include primary-bucket delta diagnostics:
+
+```text
+bucket_target_delta
+bucket_delta_error = abs(delta - bucket_target_delta)
+bucket_quality
+bucket_quality_reason
+```
+
+Initial thresholds:
+
+```text
+ok:    bucket_delta_error <= 0.05
+loose: bucket_delta_error <= 0.10
+bad:   bucket_delta_error > 0.10
+```
+
+Important interpretation:
+
+`bucket_quality` describes the row's `bucket_primary`. A row can also carry
+additional labels in `bucket_ids`; for example, a row can be primary 25D and
+also be part of the forward-nearest ATM straddle. Strategy `legs_json` includes
+the bucket target, error, quality, and quality reason for each leg.
+
+First-month bucket-quality summary:
+
+```text
+bucket rows: 84550
+ok:          74246
+loose:        8963
+bad:          1341
+```
+
+By delta bucket:
+
+```text
+bucket      rows   ok_ratio  median_error  p95_error
+25D_call   18517  97.74%    0.0146        0.0393
+25D_put    18436  89.67%    0.0192        0.0822
+50D_call   18849  92.28%    0.0196        0.0634
+50D_put    18849  92.39%    0.0200        0.0628
+ATM_call    4121  49.16%    0.0502        0.0642
+ATM_put     5778  48.15%    0.0506        0.0716
+```
+
+Interpretation:
+
+25D call quality is very stable; 25D put is still generally usable but has more
+loose selections in the first MO month. ATM bucket delta error is expected to be
+wider because ATM is selected by forward-nearest common strike, not by 50D.
+
 First-month implementation check, MO 2022-07-22 to 2022-08-19:
 
 ```text
@@ -1125,8 +1279,9 @@ Monthly `delta_bucket` rows:
 
 ### OCE-6: Strategy-Ready Chain
 
-Status: initial row-level candidate tagging and minimum strategy structure
-generation are implemented.
+Status: row-level candidate tagging, minimum strategy structure generation,
+bucket rule diagnostics, structure-level quality rules, and exception reporting
+are implemented.
 
 Deliverables:
 
@@ -1172,8 +1327,14 @@ OptionChainSnapshotReader.get_bucket_rows(...)
 OptionChainSnapshotReader.get_strategy_candidates(...)
 OptionChainSnapshotReader.get_strategy_candidates_for_day(...)
 OptionChainSnapshotReader.get_strategy_candidate_quality_report(...)
+OptionChainSnapshotReader.get_strategy_candidates_for_storage(...)
+OptionChainSnapshotReader.load_strategy_candidates_sidecar(...)
+OptionChainSnapshotReader.load_strategy_quality_sidecar(...)
 build_strategy_candidates(...)
 build_strategy_candidate_quality_report(...)
+prepare_strategy_candidates_for_storage(...)
+scripts/render_bucket_diagnostics_svg.py
+scripts/report_option_chain_exceptions.py
 ```
 
 Reader behavior:
@@ -1207,14 +1368,53 @@ Candidate quality:
 
 ```text
 ok:
-  all legs strategy_candidate_ok, IV ok, Greeks ok, and forward consistency ok
+  all legs strategy_candidate_ok, IV ok, Greeks ok, forward consistency ok,
+  bucket quality ok, and structure-level diagnostics inside ok thresholds
 
 conditional:
-  at least one leg is conditional, but no hard rejection reason
+  at least one leg is conditional, at least one selected bucket is loose, or
+  structure-level net delta is outside ok threshold but inside reject threshold
 
 rejected:
-  missing strategy eligibility, IV/Greeks failure, or warning/severe/no forward
+  missing strategy eligibility, IV/Greeks failure, warning/severe/no forward,
+  bad selected bucket, or structure-level net delta outside reject threshold
 ```
+
+Structure-level quality rules:
+
+```text
+atm_straddle:
+  ok if abs(net_delta) <= 0.10
+  conditional if abs(net_delta) <= 0.20
+  rejected if abs(net_delta) > 0.20
+
+25d_strangle:
+  ok if abs(net_delta) <= 0.15
+  conditional if abs(net_delta) <= 0.30
+  rejected if abs(net_delta) > 0.30
+
+atm_call_calendar / atm_put_calendar:
+  ok if abs(net_delta) <= 0.15
+  conditional if abs(net_delta) <= 0.30
+  rejected if abs(net_delta) > 0.30
+
+25d_risk_reversal:
+  directional structure; no net-delta neutrality reject rule
+```
+
+Bucket rule diagnostic graph:
+
+```text
+scripts/render_bucket_diagnostics_svg.py
+output: artifacts/option_chain/mo_bucket_diagnostics_2022-08-10_1000.svg
+```
+
+The diagnostic graph is read from the enriched option-chain snapshot. It marks
+current-month and next-month 25D, 50D, and ATM selections, displays target delta,
+actual delta, delta error, and bucket quality, and links the same-strike ATM
+call/put pair. The 2022-08-10 10:00 sample confirms that ATM and 50D can
+legitimately be different strikes: next-month ATM straddle uses K7100 while
+next-month 50D uses K7200.
 
 Single timestamp check, MO 2022-08-10 10:00:
 
@@ -1229,7 +1429,7 @@ atm_call_calendar:     current_month vs next_month
 atm_put_calendar:      current_month vs next_month
 ```
 
-Quality result:
+Single timestamp quality result before structure-level rules:
 
 ```text
 front-month and next-month candidates: ok
@@ -1240,10 +1440,30 @@ Daily strategy-quality sidecar:
 
 ```text
 scripts/report_strategy_candidates.py
+output: {trade_date}.strategy_candidates.parquet
 output: {trade_date}.strategy_quality.parquet
 ```
 
-The report summarizes:
+The candidate sidecar stores one row per candidate structure:
+
+- scalar fields for fast filters:
+  - `candidate_id`;
+  - `timestamp`;
+  - `structure_type`;
+  - `term_role`;
+  - `candidate_quality`;
+  - `candidate_pool`;
+  - `candidate_pool_reason`;
+  - `candidate_expiry_phase`;
+  - `net_mark`;
+  - `net_delta`;
+  - `net_gamma`;
+  - `net_theta`;
+  - `net_vega`;
+  - `net_rho`;
+- `legs_json` for leg-level details.
+
+The quality report summarizes:
 
 - candidate count;
 - timestamp coverage;
@@ -1254,32 +1474,153 @@ The report summarizes:
 - median net vega;
 - p95 absolute net delta;
 - overall, by structure, and by structure + term role.
+- expiry-phase quality split for normal vs final three trading days.
+- standardized quality scopes:
+  - `all_phase`: all strategy candidates;
+  - `normal_phase`: only `candidate_expiry_phase == normal`;
+  - `near_expiry_phase`: `last_3_trading_days` plus `final_trading_day`.
+
+Default production exception checks should use `normal_phase`. `all_phase`
+keeps the full historical picture, while `near_expiry_phase` is a separate
+observation scope for gamma/theta-dominated behavior.
+
+Candidate pool rules:
+
+```text
+primary_pool:
+  candidate_quality == ok
+  candidate_expiry_phase == normal
+  term_role in current_month, next_month, current_next_month
+
+research_pool:
+  candidate_quality == conditional, or near-expiry phase, or non-front term
+
+excluded_pool:
+  candidate_quality == rejected
+```
+
+Reader API:
+
+```text
+OptionChainSnapshotReader.get_strategy_candidates_by_pool(...)
+OptionChainSnapshotReader.get_primary_strategy_candidates(...)
+OptionChainSnapshotReader.get_research_strategy_candidates(...)
+OptionChainSnapshotReader.load_strategy_candidates_filtered(...)
+```
 
 First-month strategy-candidate quality check, MO 2022-07-22 to 2022-08-19:
 
 ```text
 trading_days         21
 candidate_count   48683
-ok_count          39361
-conditional_count  9322
-rejected_count        0
-weighted_ok_ratio 80.85%
+ok_count          32393
+conditional_count 14344
+rejected_count     1946
+weighted_ok_ratio 66.54%
 
 daily ok ratio:
-min    67.89%
-median 81.58%
-max    85.63%
+min    32.23%
+median 72.54%
+max    82.89%
 ```
+
+Standard quality scopes:
+
+```text
+quality_scope       candidates  ok_ratio  rejected_ratio
+all_phase           48683       66.54%    4.00%
+normal_phase        45221       69.94%    0.60%
+near_expiry_phase    3462       22.10%   48.38%
+```
+
+Candidate pool distribution:
+
+```text
+candidate_pool   candidates
+primary_pool     31628
+research_pool    15109
+excluded_pool     1946
+```
+
+Candidate pool reasons:
+
+```text
+normal_front_term_quality_ok        31628
+candidate_quality_conditional        4503
+term_role_current_quarter            4476
+term_role_next_quarter               4343
+candidate_quality_rejected           1946
+expiry_phase_last_3_trading_days     1482
+expiry_phase_final_trading_day        305
+```
+
+Reader API check:
+
+```text
+2022-08-10 primary_pool: 1673
+2022-08-10 research_pool: 703
+first-month primary_pool + atm_straddle: 7974
+first-month primary_pool + current_month + 25d_strangle/risk_reversal: 7543
+```
+
+Top candidate quality reasons after structure-level rules:
+
+```text
+all_legs_ok                                                            32393
+contains_conditional_leg                                                6550
+contains_loose_bucket                                                   3958
+contains_loose_bucket;contains_conditional_leg;net_delta_loose>0.10     2092
+leg_bucket_bad                                                          1944
+contains_loose_bucket;net_delta_loose>0.10                              1266
+```
+
+Exception daily report:
+
+```text
+scripts/report_option_chain_exceptions.py
+output: artifacts/option_chain/mo_exception_report_2022-07-22_2022-08-19.md
+output: artifacts/option_chain/mo_exception_report_2022-07-22_2022-08-19.csv
+```
+
+The report now flags exception days from `normal_phase` by default. The default
+thresholds are `ok_ratio < 60%` or `rejected_ratio > 2%`. Near-expiry rows are
+still reported, but they no longer contaminate the default exception-day list.
+
+Expiry-phase quality split:
+
+```text
+candidate_expiry_phase  conditional  ok     rejected
+normal                  13322        31628  271
+last_3_trading_days       873          609  901
+final_trading_day         149          156  774
+```
+
+Interpretation: normal-phase rejected candidates are low, while final-three-day
+and final-day candidates explain most of the rejected structures. Production
+quality dashboards should therefore report both all-phase quality and
+normal-phase quality, and should not use final-three-day behavior as a generic
+model-quality failure signal.
+
+Lightweight expiry-phase refresh:
+
+```text
+scripts/refresh_expiry_phase_labels.py
+```
+
+This script refreshes `remaining_trading_minutes`, `trading_days_to_expiry`,
+`expiry_phase`, strategy candidates, and strategy-quality sidecars from existing
+enriched snapshots. It does not recompute forward, IV, or Greeks, so label-rule
+changes do not require a full Black-76 repricing run.
 
 Structure-level summary:
 
 ```text
 structure            candidates  ok_ratio
-25d_risk_reversal    10001       99.40%
-25d_strangle         10001       99.40%
-atm_call_calendar     4949       97.82%
-atm_put_calendar      4949       98.12%
-atm_straddle         18783       52.08%
+25d_risk_reversal    10001       88.37%
+25d_strangle         10001       88.32%
+atm_call_calendar     4949       67.41%
+atm_put_calendar      4949       65.39%
+atm_straddle         18783       43.39%
 ```
 
 Term-level interpretation:
@@ -1291,11 +1632,39 @@ current_quarter ATM straddle:        conditional
 next_quarter ATM straddle:           conditional
 ```
 
-The low overall ATM-straddle ok ratio is driven by quarter straddles entering as
-conditional candidates. The forward-nearest common-strike ATM rule increases
-straddle coverage and is more consistent with real straddle trading than tying
-ATM to independently selected 50D call/put legs. This remains consistent with
-the desk focus on current-month and next-month trading.
+The low overall ATM-straddle ok ratio is now mainly driven by bucket looseness
+and near-expiry gamma/theta behavior, not by a failure of the same-strike ATM
+rule. The forward-nearest common-strike ATM rule increases straddle coverage and
+is more consistent with real straddle trading than tying ATM to independently
+selected 50D call/put legs. This remains consistent with the desk focus on
+current-month and next-month trading.
+
+Strategy sidecar storage:
+
+```text
+first-month candidate + quality sidecars: 8.5 MB total
+2022-08-10 strategy_candidates: 416 KB
+2022-08-10 strategy_quality: 11 KB
+```
+
+Reader benchmark, MO 2022-08-10 plus first-month sidecars:
+
+```text
+single timestamp bucket rows from enriched:     11.04 ms, rows 10
+single day candidates generated from enriched: 1799.94 ms, rows 2385
+single day candidates sidecar selected columns:   0.67 ms, rows 2385
+single day quality sidecar selected columns:      0.48 ms, rows 16
+month candidates sidecars selected columns:      13.22 ms, rows 48683
+month quality sidecars selected columns:          9.36 ms, rows 336
+```
+
+Conclusion:
+
+```text
+strategy and backtest systems should read strategy_candidates / strategy_quality
+sidecars for repeated scans. They should use enriched snapshots only when a new
+candidate rule is being generated or debugged.
+```
 
 Initial row-level rule:
 
@@ -1420,6 +1789,8 @@ Implemented sidecar output:
 ```text
 {trade_date}.meta.json
 {trade_date}.quality.parquet
+{trade_date}.strategy_candidates.parquet
+{trade_date}.strategy_quality.parquet
 ```
 
 Current script behavior:

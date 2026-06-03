@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbols-file", help="Text/CSV file containing symbols to download.")
     parser.add_argument("--max-contracts", type=int, default=0, help="0 means all symbols in range.")
     parser.add_argument("--max-quote-age-ms", type=int, default=60_000)
-    parser.add_argument("--workers", type=int, default=4, help="Parallel TqApi workers (default: 4).")
+    parser.add_argument("--workers", type=int, default=2, help="Parallel TqApi workers (default: 2).")
     parser.add_argument("--retry-attempts", type=int, default=2, help="Attempts per symbol-day before marking failure.")
     parser.add_argument("--retry-sleep-seconds", type=float, default=2.0)
     parser.add_argument("--first-valid-date-cache", help="JSON map symbol -> first valid quote date.")

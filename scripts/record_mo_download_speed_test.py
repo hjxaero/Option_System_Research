@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--note", default="", help="Free-form note (VPN settings, etc.)")
     parser.add_argument("--start", default="2022-11-09")
     parser.add_argument("--end", default="2022-11-10")
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--max-contracts", type=int, default=36)
     parser.add_argument("--record-file", type=Path, default=DEFAULT_RECORD)
     return parser.parse_args()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
 
 import pandas as pd
 
@@ -10,9 +11,11 @@ FRONT_TERM_ROLES = ("current_month", "next_month")
 CANDIDATE_REPORT_COLUMNS = [
     "product",
     "trade_date",
+    "quality_scope",
     "scope",
     "structure_type",
     "term_role",
+    "candidate_expiry_phase",
     "timestamp_count",
     "candidate_count",
     "ok_count",
@@ -26,6 +29,15 @@ CANDIDATE_REPORT_COLUMNS = [
     "median_net_vega",
     "p95_abs_net_delta",
 ]
+NET_DELTA_LIMITS = {
+    "atm_straddle": (0.10, 0.20),
+    "25d_strangle": (0.15, 0.30),
+    "atm_call_calendar": (0.15, 0.30),
+    "atm_put_calendar": (0.15, 0.30),
+}
+NORMAL_EXPIRY_PHASES = {"normal"}
+NEAR_EXPIRY_PHASES = {"last_3_trading_days", "final_trading_day"}
+PRIMARY_TERM_ROLES = {"current_month", "next_month", "current_next_month"}
 
 
 def _has_bucket(row: pd.Series, bucket_id: str) -> bool:
@@ -48,8 +60,14 @@ def _optional_float(value: object) -> float | None:
     return float(value)
 
 
-def _quality(rows: Iterable[pd.Series]) -> tuple[str, str]:
+def _quality(
+    rows: Iterable[pd.Series],
+    *,
+    structure_type: str,
+    net_delta: float | None,
+) -> tuple[str, str]:
     tiers = []
+    conditional_reasons = []
     for row in rows:
         if row.get("strategy_candidate_ok") != True:  # noqa: E712
             return "rejected", "leg_not_strategy_ok"
@@ -60,8 +78,26 @@ def _quality(rows: Iterable[pd.Series]) -> tuple[str, str]:
         forward_quality = str(row.get("forward_consistency_quality", ""))
         if forward_quality in {"basis_warning", "basis_severe", "both_degraded", "no_forward"}:
             return "rejected", f"forward_{forward_quality}"
+        if "bucket_quality" in row.index:
+            bucket_quality = str(row.get("bucket_quality", ""))
+            if bucket_quality == "bad":
+                return "rejected", "leg_bucket_bad"
+            if bucket_quality == "loose":
+                conditional_reasons.append("contains_loose_bucket")
     if "conditional" in tiers:
-        return "conditional", "contains_conditional_leg"
+        conditional_reasons.append("contains_conditional_leg")
+
+    limits = NET_DELTA_LIMITS.get(structure_type)
+    if limits is not None and net_delta is not None:
+        ok_limit, conditional_limit = limits
+        abs_net_delta = abs(float(net_delta))
+        if abs_net_delta > conditional_limit:
+            return "rejected", f"net_delta_bad>{conditional_limit:.2f}"
+        if abs_net_delta > ok_limit:
+            conditional_reasons.append(f"net_delta_loose>{ok_limit:.2f}")
+
+    if conditional_reasons:
+        return "conditional", ";".join(dict.fromkeys(conditional_reasons))
     return "ok", "all_legs_ok"
 
 
@@ -75,6 +111,40 @@ def _signed_sum(rows: list[pd.Series], quantities: list[int], column: str) -> fl
         seen = True
         total += quantity * value
     return total if seen else None
+
+
+def _candidate_expiry_phase(rows: list[pd.Series]) -> tuple[str | None, int | None]:
+    phases = []
+    for row in rows:
+        phase = row.get("expiry_phase")
+        rank = row.get("expiry_phase_rank")
+        if phase is None or pd.isna(phase):
+            continue
+        rank_value = -1 if rank is None or pd.isna(rank) else int(rank)
+        phases.append((rank_value, str(phase)))
+    if not phases:
+        return None, None
+    rank, phase = max(phases, key=lambda item: item[0])
+    return phase, rank
+
+
+def _candidate_pool(
+    *,
+    quality: str,
+    term_role: str,
+    expiry_phase: str | None,
+) -> tuple[str, str]:
+    if quality == "rejected":
+        return "excluded_pool", "candidate_quality_rejected"
+    if expiry_phase in NEAR_EXPIRY_PHASES:
+        return "research_pool", f"expiry_phase_{expiry_phase}"
+    if term_role not in PRIMARY_TERM_ROLES:
+        return "research_pool", f"term_role_{term_role}"
+    if quality == "ok" and expiry_phase == "normal":
+        return "primary_pool", "normal_front_term_quality_ok"
+    if quality == "conditional":
+        return "research_pool", "candidate_quality_conditional"
+    return "research_pool", f"candidate_quality_{quality or 'unknown'}"
 
 
 def _leg_payload(row: pd.Series, quantity: int, leg_role: str) -> dict[str, object]:
@@ -95,6 +165,13 @@ def _leg_payload(row: pd.Series, quantity: int, leg_role: str) -> dict[str, obje
         "rho": _optional_float(row.get("rho")),
         "bucket_ids": row.get("bucket_ids"),
         "bucket_primary": row.get("bucket_primary"),
+        "bucket_target_delta": _optional_float(row.get("bucket_target_delta")),
+        "bucket_delta_error": _optional_float(row.get("bucket_delta_error")),
+        "bucket_quality": row.get("bucket_quality"),
+        "bucket_quality_reason": row.get("bucket_quality_reason"),
+        "remaining_trading_minutes": _optional_float(row.get("remaining_trading_minutes")),
+        "trading_days_to_expiry": _optional_float(row.get("trading_days_to_expiry")),
+        "expiry_phase": row.get("expiry_phase"),
     }
 
 
@@ -109,10 +186,13 @@ def _candidate_row(
     leg_roles: list[str],
     term_role: str,
 ) -> dict[str, object]:
-    quality, reason = _quality(rows)
     first = rows[0]
     timestamp = pd.Timestamp(first["timestamp"])
     legs = [_leg_payload(row, quantity, leg_role) for row, quantity, leg_role in zip(rows, quantities, leg_roles)]
+    net_delta = _signed_sum(rows, quantities, "delta")
+    quality, reason = _quality(rows, structure_type=structure_type, net_delta=net_delta)
+    expiry_phase, expiry_phase_rank = _candidate_expiry_phase(rows)
+    pool, pool_reason = _candidate_pool(quality=quality, term_role=term_role, expiry_phase=expiry_phase)
     result = {
         "candidate_id": candidate_id,
         "product": product.upper(),
@@ -125,10 +205,14 @@ def _candidate_row(
         "net_mark": _signed_sum(rows, quantities, "mark_price"),
         "candidate_quality": quality,
         "candidate_reason": reason,
+        "candidate_expiry_phase": expiry_phase,
+        "candidate_expiry_phase_rank": expiry_phase_rank,
+        "candidate_pool": pool,
+        "candidate_pool_reason": pool_reason,
         "legs": legs,
     }
     for greek in GREEK_COLUMNS:
-        result[f"net_{greek}"] = _signed_sum(rows, quantities, greek)
+        result[f"net_{greek}"] = net_delta if greek == "delta" else _signed_sum(rows, quantities, greek)
     return result
 
 
@@ -273,9 +357,11 @@ def _report_row(
     *,
     product: str,
     trade_date: str,
+    quality_scope: str,
     scope: str,
     structure_type: str | None = None,
     term_role: str | None = None,
+    candidate_expiry_phase: str | None = None,
 ) -> dict[str, object]:
     total = int(len(frame))
     quality = frame.get("candidate_quality", pd.Series(dtype=object)).fillna("")
@@ -285,9 +371,11 @@ def _report_row(
     return {
         "product": product.upper(),
         "trade_date": trade_date,
+        "quality_scope": quality_scope,
         "scope": scope,
         "structure_type": structure_type,
         "term_role": term_role,
+        "candidate_expiry_phase": candidate_expiry_phase,
         "timestamp_count": int(pd.to_datetime(frame.get("timestamp", pd.Series(dtype=object))).dropna().nunique()),
         "candidate_count": total,
         "ok_count": ok_count,
@@ -317,32 +405,87 @@ def build_strategy_candidate_quality_report(
                     pd.DataFrame(),
                     product=product,
                     trade_date=trade_date,
+                    quality_scope="all_phase",
                     scope="overall",
                 )
             ],
             columns=CANDIDATE_REPORT_COLUMNS,
         )
 
-    rows = [_report_row(candidates, product=product, trade_date=trade_date, scope="overall")]
-    for structure_type, group in candidates.groupby("structure_type", sort=True):
-        rows.append(
-            _report_row(
-                group,
-                product=product,
-                trade_date=trade_date,
-                scope="structure",
-                structure_type=str(structure_type),
+    rows = []
+    for quality_scope, scoped in _quality_scope_frames(candidates):
+        rows.append(_report_row(scoped, product=product, trade_date=trade_date, quality_scope=quality_scope, scope="overall"))
+        for structure_type, group in scoped.groupby("structure_type", sort=True):
+            rows.append(
+                _report_row(
+                    group,
+                    product=product,
+                    trade_date=trade_date,
+                    quality_scope=quality_scope,
+                    scope="structure",
+                    structure_type=str(structure_type),
+                )
             )
-        )
-    for (structure_type, term_role), group in candidates.groupby(["structure_type", "term_role"], sort=True):
-        rows.append(
-            _report_row(
-                group,
-                product=product,
-                trade_date=trade_date,
-                scope="structure_term",
-                structure_type=str(structure_type),
-                term_role=str(term_role),
+        for (structure_type, term_role), group in scoped.groupby(["structure_type", "term_role"], sort=True):
+            rows.append(
+                _report_row(
+                    group,
+                    product=product,
+                    trade_date=trade_date,
+                    quality_scope=quality_scope,
+                    scope="structure_term",
+                    structure_type=str(structure_type),
+                    term_role=str(term_role),
+                )
             )
-        )
+        if "candidate_expiry_phase" in scoped.columns:
+            for candidate_expiry_phase, group in scoped.groupby("candidate_expiry_phase", dropna=False, sort=True):
+                rows.append(
+                    _report_row(
+                        group,
+                        product=product,
+                        trade_date=trade_date,
+                        quality_scope=quality_scope,
+                        scope="expiry_phase",
+                        candidate_expiry_phase=None if pd.isna(candidate_expiry_phase) else str(candidate_expiry_phase),
+                    )
+                )
     return pd.DataFrame(rows, columns=CANDIDATE_REPORT_COLUMNS)
+
+
+def _quality_scope_frames(candidates: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+    frames = [("all_phase", candidates)]
+    if "candidate_expiry_phase" not in candidates.columns:
+        return frames
+    phase = candidates["candidate_expiry_phase"].fillna("")
+    normal = candidates[phase.isin(NORMAL_EXPIRY_PHASES)].copy()
+    near_expiry = candidates[phase.isin(NEAR_EXPIRY_PHASES)].copy()
+    frames.append(("normal_phase", normal))
+    frames.append(("near_expiry_phase", near_expiry))
+    return frames
+
+
+def prepare_strategy_candidates_for_storage(candidates: pd.DataFrame) -> pd.DataFrame:
+    """Normalize candidate rows for Parquet sidecar storage."""
+    result = candidates.copy()
+    if result.empty:
+        return result
+    if "legs" in result.columns:
+        result["legs_json"] = result["legs"].apply(lambda value: json.dumps(_jsonable(value), ensure_ascii=False, sort_keys=True))
+        result = result.drop(columns=["legs"])
+    return result
+
+
+def _jsonable(value: object) -> object:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    return value

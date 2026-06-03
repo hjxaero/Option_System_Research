@@ -159,7 +159,7 @@ def _spawn_detached(argv: list[str], log_path: Path, append: bool = True) -> int
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workers", type=int, default=int(os.environ.get("WORKERS", "4")))
+    parser.add_argument("--workers", type=int, default=int(os.environ.get("WORKERS", "2")))
     parser.add_argument("--interval-seconds", type=int, default=60)
     parser.add_argument("--grace-seconds", type=int, default=600)
     parser.add_argument("--restart-cooldown-seconds", type=int, default=60)

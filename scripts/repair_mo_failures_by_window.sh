@@ -9,7 +9,7 @@ source Normal/bin/activate
 
 BATCH="data_store/quality/MO/batch_10d"
 LOG="${LOG:-$BATCH/repair_by_window.log}"
-WORKERS="${WORKERS:-4}"
+WORKERS="${WORKERS:-2}"
 FROM_WINDOW="${FROM_WINDOW:-1}"
 
 exec > >(tee -a "$LOG") 2>&1

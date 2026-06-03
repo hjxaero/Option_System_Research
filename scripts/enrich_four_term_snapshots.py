@@ -76,7 +76,8 @@ def value_counts(frame: pd.DataFrame, column: str) -> dict[str, int]:
         return {}
     result: dict[str, int] = {}
     for key, value in frame[column].value_counts(dropna=False).to_dict().items():
-        result["null" if pd.isna(key) else str(key)] = int(value)
+        label = "null" if pd.isna(key) else str(key)
+        result[label] = result.get(label, 0) + int(value)
     return result
 
 
@@ -136,8 +137,14 @@ def quality_row(
         "strategy_candidate_excluded": count_equal(frame, "strategy_candidate_tier", "excluded"),
         "strategy_candidate_ok_ratio": ratio(count_equal(frame, "strategy_candidate_ok", True), total),
         "bucket_candidate_rows": int(frame.get("bucket_primary", pd.Series(dtype=object)).notna().sum()),
+        "bucket_quality_ok": count_equal(frame, "bucket_quality", "ok"),
+        "bucket_quality_loose": count_equal(frame, "bucket_quality", "loose"),
+        "bucket_quality_bad": count_equal(frame, "bucket_quality", "bad"),
         "atm_straddle_candidate_rows": count_equal(frame, "is_atm_straddle_candidate", True),
         "atm_straddle_candidate_count": int(frame.get("straddle_candidate_id", pd.Series(dtype=object)).dropna().nunique()),
+        "expiry_phase_normal": count_equal(frame, "expiry_phase", "normal"),
+        "expiry_phase_last_3_trading_days": count_equal(frame, "expiry_phase", "last_3_trading_days"),
+        "expiry_phase_final_trading_day": count_equal(frame, "expiry_phase", "final_trading_day"),
         "median_abs_forward_basis_bps": None if forward_basis_bps.dropna().empty else float(forward_basis_bps.median()),
         "p95_abs_forward_basis_bps": None if forward_basis_bps.dropna().empty else float(forward_basis_bps.quantile(0.95)),
     }
@@ -201,10 +208,14 @@ def build_meta(
         "strategy_candidate_reason_distribution": value_counts(enriched, "strategy_candidate_reason"),
         "bucket_primary_distribution": value_counts(enriched, "bucket_primary"),
         "delta_bucket_distribution": value_counts(enriched, "delta_bucket"),
+        "bucket_quality_distribution": value_counts(enriched, "bucket_quality"),
+        "bucket_quality_reason_distribution": value_counts(enriched, "bucket_quality_reason"),
         "atm_straddle_candidate_rows": count_equal(enriched, "is_atm_straddle_candidate", True),
         "atm_straddle_candidate_count": int(enriched.get("straddle_candidate_id", pd.Series(dtype=object)).dropna().nunique()),
         "market_phase_distribution": value_counts(enriched, "market_phase"),
         "contract_listing_phase_distribution": value_counts(enriched, "contract_listing_phase"),
+        "expiry_phase_distribution": value_counts(enriched, "expiry_phase"),
+        "expiry_phase_reason_distribution": value_counts(enriched, "expiry_phase_reason"),
         "forward_source_distribution": value_counts(enriched, "forward_source"),
         "forward_consistency_distribution": value_counts(enriched, "forward_consistency_quality"),
         "contract_multiplier_distribution": value_counts(enriched, "contract_multiplier"),
