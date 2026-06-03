@@ -14,7 +14,7 @@ alwaysApply: true
 
 ## Agent 分工
 
-- **市场数据 Agent**（`.cursor/rules/market-data-agent.mdc`）：只交付 `quotes/minute/` 分钟盘口原始层，供下游引擎消费。
+- **市场数据 Agent**：只交付 `quotes/minute/` 分钟盘口原始层。Cursor **独立工作区**：`/Users/hjx_aero/Option_Market_Data`（`alwaysApply` 规则仅在该目录）；本仓库内 `market-data-agent.mdc` 为参考副本（`alwaysApply: false`）。
 - **期权链 Agent（系统 2）**（`.cursor/rules/option-chain-agent.mdc`）：交付四期限期权链、enriched snapshot、`OptionChain` 查询语义。
 - **波动率曲面 Agent（系统 3）**（`.cursor/rules/iv-surface-agent.mdc`）：消费 enriched snapshot，交付 `raw_iv` / `smooth_iv` 曲面节点、质量标签和曲面质量摘要。
 - 快照、IV/Greeks、曲面、期权链内存引擎等 **不属于** 市场数据 Agent 默认任务；见该规则中的 P1/P2 排除项。

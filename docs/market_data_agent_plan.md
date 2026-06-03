@@ -5,7 +5,7 @@
 > 范围：**分钟盘口原始层** — MO 期权 + 定价用股指期货 **IM**（不含快照 / IV / 曲面）。  
 > IM 专项计划见 **§6**。
 
-最后更新：**2026-06-01**（新增 §6：IM 股指期货分钟盘口需求与计划）
+最后更新：**2026-06-02**（用户续跑 P0：重启第 33 窗下载 + 看门狗）
 
 ---
 
@@ -71,11 +71,11 @@
 
 | 指标 | 数值 |
 |------|------|
-| 分窗进度 | **10 / 141**（7.1%） |
-| 日历覆盖（manifest 已完成） | **2022-07-22** ～ **2022-10-29** |
-| 下一窗 | **第 11 窗**：`2022-10-30` ～ `2022-11-08`（**进行中**） |
-| 本地 parquet 文件数 | 约 **14,956** |
-| 后台任务 | **P0 全历史下载中**（`build_windowed`，workers=4，从第 10 窗起） |
+| 分窗进度 | **33 / 141**（23.4%） |
+| 日历覆盖（manifest 已完成） | **2022-07-22** ～ **2023-06-16** |
+| 当前窗 | **第 34 窗**：`2023-06-17` ～ `2023-06-26`（**进行中**） |
+| 本地 parquet 文件数 | 约 **45,672** |
+| 后台任务 | **P0 全历史下载 + 看门狗**（`start_mo_download_with_watchdog.sh`，workers=4） |
 
 Manifest：`data_store/quality/MO/batch_10d/MO_20220722_20260530_w10_manifest.json`  
 日志：`data_store/quality/MO/batch_10d/full_history.log`
@@ -93,6 +93,7 @@ Manifest：`data_store/quality/MO/batch_10d/MO_20220722_20260530_w10_manifest.js
 | 7 | 2022-09-20～09-29 | 62.2 min | 1680 | 15 | |
 | 8 | 2022-09-30～10-09 | 5.2 min | 294 | **177→12** | P1 已补拉 906 日；余 12 合约见 `*_retry_failures.csv` |
 | 9 | 2022-10-10～10-19 | 20.7 min | 1007 | 3 | |
+| 10～32 | 2022-10-20～2023-06-06 | 见 manifest | 见 manifest | 见 manifest | 明细见 `window_metrics`（第 8 窗仍余 12 失败合约） |
 
 ### 3.2 质量补拉（分钟层）
 
@@ -102,9 +103,10 @@ Manifest：`data_store/quality/MO/batch_10d/MO_20220722_20260530_w10_manifest.js
 
 ### 3.3 已知风险 / 阻塞
 
-1. **第 8 窗余 12 失败**：P1 后从 177 降至 12（多为 Tq 超时）；清单 `MO_20220930_20221009_retry_failures.csv`。  
-2. **勿并行 download**：Tq FileLock；同时只跑一条流水线。  
-3. **`workers=2`**：实测易锁冲突，续跑统一用 **4**。
+1. **第 8 窗余 12 失败**：P1 后从 177 降至 12；清单 `MO_20220930_20221009_retry_failures.csv`。  
+2. **第 12 窗**：原 3 失败已补拉完成（`window12_retry.log`）。  
+3. **勿并行 download**：Tq FileLock；同时只跑一条流水线。  
+4. **`workers=2`**：实测易锁冲突，续跑统一用 **4**。
 
 ---
 
@@ -113,23 +115,21 @@ Manifest：`data_store/quality/MO/batch_10d/MO_20220722_20260530_w10_manifest.js
 | 优先级 | 动作 | 命令/入口 |
 |--------|------|-----------|
 | P0 | 续跑 MO 全历史 | `build_windowed_four_term_minute_quotes.py`（**进行中**，勿并行 IM） |
+| P0a | 研究「每窗耗时」与是否需要“窗内超时重启” | 看门狗重启前 **清理 orphan worker**（`monitor_mo_download_watchdog.py`）；`restart-if-window-elapsed` 仍待办 |
 | P4 | IM 股指期货分钟盘口 | §6 阶段 E1→E5（待立项实施） |
 | P1 | ~~补第 8 窗 failures~~ | **已完成**（906 saved，12 仍失败） |
 | P1b | 余 12 合约再试 | `window8_failures_symbols.txt` 子集或读 `*_retry_failures.csv` |
 | P2 | 各窗 failures 扫尾 | 合并 `batch_10d/*_failures.csv` |
 | P3 | 全历史完成后再做区间 repair | `generate_repair_plan` + `repair_minute_quotes_from_plan` |
 
-续跑示例（**需用户确认后执行**）：
+续跑示例（**下载 + 看门狗一条命令**，推荐）：
 
 ```bash
-cd /Users/hjx_aero/Option_System_Research && source Normal/bin/activate
-caffeinate -dims python scripts/build_windowed_four_term_minute_quotes.py \
-  --start 2022-07-22 --end 2026-05-30 \
-  --window-days 10 --workers 4 --min-workers 4 \
-  --skip-complete --infer-first-valid \
-  --first-valid-date-cache data_store/contracts/MO/first_valid_dates.json \
-  2>&1 | tee -a data_store/quality/MO/batch_10d/full_history.log
+cd /Users/hjx_aero/Option_System_Research
+bash scripts/start_mo_download_with_watchdog.sh
 ```
+
+看门狗：`scripts/monitor_mo_download_watchdog.py`（进程意外停止自动重启；每完成 1 窗重启下载进程；**只** kill `build_windowed` / `build_month`）。日志：`batch_10d/watchdog.log`。
 
 ---
 
@@ -226,4 +226,15 @@ caffeinate -dims python scripts/build_windowed_four_term_minute_quotes.py \
 | 2026-06-01 | 文档布局：`docs/` 仅 Agent 计划；架构/规则/IM demo 迁至 `docs_fix/` |
 | 2026-06-01 | 蓝图 PDF 保留在 `docs/blueprints/` |
 | 2026-06-01 | 用户要求停 P0；workers 4 vs 6 实测（36 合约×2 日）：4=196s/0 失败，6=188s/1 超时失败 → **仍建议 workers=4** |
+| 2026-06-02 | 第 12 窗补拉：`2022-11-09`～`11-18` 余 3 合约（`window12_failures_symbols.txt`）→ **saved_days=24，failed_symbols=0** |
 | 2026-06-01 | IM E1/E3：`option_platform/data/futures/` + `scripts/build_im_minute_quotes.py` + 单测 |
+| 2026-06-02 | 用户「续下 MO」：`bash scripts/start_mo_download_with_watchdog.sh`；manifest **32/141** 完成，续跑 **第 33 窗** `2023-06-07`～`2023-06-16`；日志 `batch_10d/full_history.log` |
+| 2026-06-02 | 用户关闭后台 Python：清理 `build_*` / `monitor_mo_download` 及 **5 组** 孤儿 `multiprocessing` worker（第 33 窗仍未完成） |
+| 2026-06-02 | 用户「先补拉」：第 8 窗 12 合约 retry2 **saved_days=72，failed_symbols=0**；Step2 `missing_file` repair 已启动后用户嫌慢 |
+| 2026-06-02 | 停 `repair_minute_quotes_from_plan`（`missing_file` 1284 行）；改 **按窗 failures 补拉** `repair_mo_failures_by_window.sh`（25 窗 / 日志 `repair_by_window.log`） |
+| 2026-06-02 | 按窗 failures 补拉 **完成**：25/25 窗，`saved_days=2010`，**`failed_symbols=0`**（约 6.6 min）；无 `*_failures_retry_failures.csv` |
+| 2026-06-02 | 新增 failures 台账同步：`sync_mo_window_failures.py` + `failure_records.py`；25 窗 active failures 归档为 `*.resolved.csv`（避免重复补拉） |
+| 2026-06-02 | 用户续跑 P0：`start_mo_download_with_watchdog.sh`；manifest **32/141**，从第 **33** 窗 `2023-06-07`～`2023-06-16` 起 |
+| 2026-06-02 | 看门狗：重启下载前 `pkill` 项目 venv 的 orphan `multiprocessing` worker（缓解多窗后降速） |
+| 2026-06-02 | `option_platform/common/process_pool.py`：`build_month` / repair 进程池 SIGTERM 时 `shutdown(cancel_futures=True)`，减少 orphan worker 根因 |
+| 2026-06-02 | 新增 `scripts/launch_mo_download_daemon.py`：用 `start_new_session=True` 完全脱离会话拉起 下载/看门狗/孤儿监控（macOS 无 `setsid`，旧 `nohup &` 会随 shell 退出被杀）；`--restart` 先清理旧进程与 orphan worker。`launch_mo_download_daemon.sh` 改为薄包装委托该脚本 |

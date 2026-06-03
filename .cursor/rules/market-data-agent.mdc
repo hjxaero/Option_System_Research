@@ -1,6 +1,6 @@
 ---
-description: 市场数据系统 Agent——仅分钟盘口原始层，为下游引擎供数
-alwaysApply: true
+description: 市场数据系统 Agent——仅分钟盘口原始层（完整版；日常请用 Option_Market_Data 工作区）
+alwaysApply: false
 ---
 
 # Market Data System Agent

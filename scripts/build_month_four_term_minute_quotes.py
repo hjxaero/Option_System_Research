@@ -4,7 +4,6 @@ import argparse
 import json
 import sys
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from time import sleep
@@ -15,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from option_platform.common.process_pool import run_process_pool
 from option_platform.common.settings import PlatformPaths
 from option_platform.data.contracts import OptionContract
 from option_platform.data.contract_dates import filter_dates_by_first_valid, load_first_valid_date_cache
@@ -342,28 +342,24 @@ def main() -> None:
                 failed_symbols += 1
                 print(f"  fail {result['error'] or result['failures'][:2]}", flush=True)
     else:
-        with ProcessPoolExecutor(max_workers=args.workers) as pool:
-            futures = {pool.submit(_symbol_daily_job, job): job["symbol"] for job in jobs}
-            done = 0
-            for future in as_completed(futures):
-                done += 1
-                result = future.result()
-                results.append(result)
-                saved_total += result["saved"]
-                skipped_total += result["skipped"]
-                if result["error"] or result["failures"]:
-                    failed_symbols += 1
-                    print(
-                        f"[{done}/{total}] fail {result['symbol']}: "
-                        f"{result['error'] or result['failures'][:2]}",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"[{done}/{total}] {result['symbol']} "
-                        f"saved={result['saved']} skipped={result['skipped']}",
-                        flush=True,
-                    )
+        results = run_process_pool(_symbol_daily_job, jobs, max_workers=args.workers)
+        total = len(jobs)
+        for done, result in enumerate(results, 1):
+            saved_total += result["saved"]
+            skipped_total += result["skipped"]
+            if result["error"] or result["failures"]:
+                failed_symbols += 1
+                print(
+                    f"[{done}/{total}] fail {result['symbol']}: "
+                    f"{result['error'] or result['failures'][:2]}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[{done}/{total}] {result['symbol']} "
+                    f"saved={result['saved']} skipped={result['skipped']}",
+                    flush=True,
+                )
 
     print(
         f"done saved_days={saved_total} skipped_days={skipped_total} failed_symbols={failed_symbols}",

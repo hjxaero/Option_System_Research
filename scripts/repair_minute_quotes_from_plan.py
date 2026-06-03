@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from option_platform.common.process_pool import run_process_pool
 from option_platform.common.settings import PlatformPaths
 from option_platform.data.live_update import update_symbol_range_minute_quotes
 from option_platform.data.quality.minute_quote_report import write_quality_report
@@ -147,27 +147,23 @@ def main() -> None:
                 failed_symbols += 1
                 print(f"  fail {result['error'] or result['failures'][:3]}", flush=True)
     else:
-        with ProcessPoolExecutor(max_workers=args.workers) as pool:
-            futures = {pool.submit(_repair_symbol_job, job): job["symbol"] for job in jobs}
-            done = 0
-            for future in as_completed(futures):
-                done += 1
-                result = future.result()
-                saved_total += result["saved"]
-                skipped_total += result["skipped"]
-                if result["error"] or result["failures"]:
-                    failed_symbols += 1
-                    print(
-                        f"[{done}/{total}] fail {result['symbol']}: "
-                        f"{result['error'] or result['failures'][:3]}",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"[{done}/{total}] {result['symbol']} "
-                        f"saved={result['saved']} skipped={result['skipped']}",
-                        flush=True,
-                    )
+        pool_results = run_process_pool(_repair_symbol_job, jobs, max_workers=args.workers)
+        for done, result in enumerate(pool_results, 1):
+            saved_total += result["saved"]
+            skipped_total += result["skipped"]
+            if result["error"] or result["failures"]:
+                failed_symbols += 1
+                print(
+                    f"[{done}/{total}] fail {result['symbol']}: "
+                    f"{result['error'] or result['failures'][:3]}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[{done}/{total}] {result['symbol']} "
+                    f"saved={result['saved']} skipped={result['skipped']}",
+                    flush=True,
+                )
 
     print(
         f"done saved_days={saved_total} skipped_days={skipped_total} failed_symbols={failed_symbols}",
